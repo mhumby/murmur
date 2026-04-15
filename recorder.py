@@ -38,8 +38,20 @@ class AudioRecorder:
                 return np.zeros(0, dtype=np.float32)
             audio = np.concatenate(self._chunks, axis=0).flatten()
 
-        return audio
+        return _trim_silence(audio)
 
     def _callback(self, indata: np.ndarray, frames: int, time, status) -> None:
         with self._lock:
             self._chunks.append(indata.copy())
+
+
+def _trim_silence(audio: np.ndarray, threshold: float = 0.01, chunk_ms: int = 50) -> np.ndarray:
+    """Strip trailing silence to prevent Whisper from hallucinating filler."""
+    chunk_size = int(SAMPLE_RATE * chunk_ms / 1000)
+    end = len(audio)
+    while end > chunk_size:
+        chunk = audio[end - chunk_size : end]
+        if np.max(np.abs(chunk)) > threshold:
+            break
+        end -= chunk_size
+    return audio[:end]

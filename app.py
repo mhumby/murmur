@@ -2,13 +2,16 @@
 
 import threading
 import rumps
-from pynput import keyboard as pynput_keyboard
+from Cocoa import NSEvent, NSKeyDownMask, NSFlagsChangedMask, NSAlternateKeyMask, NSEventModifierFlagFunction
 
 from recorder import AudioRecorder
 from transcriber import Transcriber
 import text_inserter as text_typer
 
-HOTKEY = "<alt>space"   # ⌥Space  — change to e.g. "<ctrl><shift>d" if preferred
+# Hotkey: ⌥Space (Option + Space)
+HOTKEY_KEY_CODE = 49
+HOTKEY_MODIFIER = NSAlternateKeyMask
+HOTKEY_DISPLAY = "⌥Space / fn"
 
 ICON_IDLE = "🎤"
 ICON_RECORDING = "🔴"
@@ -30,11 +33,10 @@ class MurmurApp(rumps.App):
         self._recorder = AudioRecorder()
         self._transcriber = Transcriber(MODEL_OPTIONS[DEFAULT_MODEL_KEY])
         self._is_recording = False
-        self._hotkey_listener: pynput_keyboard.Listener | None = None
 
         # Build menu
         self._toggle_item = rumps.MenuItem(
-            f"Start Recording  ({_hotkey_display(HOTKEY)})",
+            f"Start Recording  ({HOTKEY_DISPLAY})",
             callback=self._on_toggle,
         )
         self._model_items: dict[str, rumps.MenuItem] = {}
@@ -47,34 +49,35 @@ class MurmurApp(rumps.App):
 
         self.menu = [self._toggle_item, None, model_menu]
 
-        self._start_hotkey_listener()
+        self._register_hotkey()
 
     # ------------------------------------------------------------------
-    # Hotkey
+    # Hotkey — uses Cocoa NSEvent global monitor (no Accessibility needed)
     # ------------------------------------------------------------------
 
-    def _start_hotkey_listener(self) -> None:
-        hotkey = pynput_keyboard.HotKey(
-            pynput_keyboard.HotKey.parse(HOTKEY),
-            self._on_hotkey,
+    def _register_hotkey(self) -> None:
+        # ⌥Space
+        NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+            NSKeyDownMask,
+            self._handle_global_key,
+        )
+        # fn (Globe) key — fires as a modifier flag change
+        self._fn_was_down = False
+        NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+            NSFlagsChangedMask,
+            self._handle_flags_changed,
         )
 
-        def canonical_press(key):
-            hotkey.press(self._hotkey_listener.canonical(key))  # type: ignore[union-attr]
+    def _handle_global_key(self, event) -> None:
+        if event.keyCode() == HOTKEY_KEY_CODE and (event.modifierFlags() & HOTKEY_MODIFIER):
+            rumps.Timer(self._toggle_recording_main_thread, 0).start()
 
-        def canonical_release(key):
-            hotkey.release(self._hotkey_listener.canonical(key))  # type: ignore[union-attr]
-
-        self._hotkey_listener = pynput_keyboard.Listener(
-            on_press=canonical_press,
-            on_release=canonical_release,
-        )
-        self._hotkey_listener.daemon = True
-        self._hotkey_listener.start()
-
-    def _on_hotkey(self) -> None:
-        # HotKey fires on the listener thread — bounce to main thread via timer.
-        rumps.Timer(self._toggle_recording_main_thread, 0).start()
+    def _handle_flags_changed(self, event) -> None:
+        fn_down = bool(event.modifierFlags() & NSEventModifierFlagFunction)
+        if fn_down and not self._fn_was_down:
+            # fn key just pressed — toggle recording
+            rumps.Timer(self._toggle_recording_main_thread, 0).start()
+        self._fn_was_down = fn_down
 
     def _toggle_recording_main_thread(self, _timer) -> None:
         _timer.stop()
@@ -96,7 +99,7 @@ class MurmurApp(rumps.App):
     def _start_recording(self) -> None:
         self._is_recording = True
         self.title = ICON_RECORDING
-        self._toggle_item.title = "Stop Recording  (click or ⌥Space)"
+        self._toggle_item.title = f"Stop Recording  (click or {HOTKEY_DISPLAY})"
         self._recorder.start()
 
     def _stop_recording(self) -> None:
@@ -109,16 +112,19 @@ class MurmurApp(rumps.App):
         ).start()
 
     def _transcribe_and_type(self, audio) -> None:
+        print(f"[murmur] Transcribing {len(audio)/16000:.1f}s of audio...")
         text = self._transcriber.transcribe(audio)
+        print(f"[murmur] Result: {text!r}")
         if text:
             text_typer.type_text(text)
-        # Reset UI on main thread
+        else:
+            print("[murmur] No text detected.")
         rumps.Timer(self._reset_ui, 0).start()
 
     def _reset_ui(self, _timer) -> None:
         _timer.stop()
         self.title = ICON_IDLE
-        self._toggle_item.title = f"Start Recording  ({_hotkey_display(HOTKEY)})"
+        self._toggle_item.title = f"Start Recording  ({HOTKEY_DISPLAY})"
 
     # ------------------------------------------------------------------
     # Model selection
@@ -129,20 +135,6 @@ class MurmurApp(rumps.App):
             item.state = 1 if item is sender else 0
         model_id = MODEL_OPTIONS[sender.title]
         self._transcriber = Transcriber(model_id)
-
-
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
-
-def _hotkey_display(hotkey_str: str) -> str:
-    return (
-        hotkey_str.replace("<alt>", "⌥")
-        .replace("<cmd>", "⌘")
-        .replace("<ctrl>", "⌃")
-        .replace("<shift>", "⇧")
-        .replace("space", "Space")
-    )
 
 
 if __name__ == "__main__":

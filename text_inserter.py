@@ -1,54 +1,34 @@
-"""Text inserter — pastes transcribed text at the current cursor position."""
+"""Text inserter — pastes text into the focused app via clipboard + Cmd+V."""
 
 import subprocess
-import threading
 import time
 import pyperclip
-from pynput.keyboard import Controller, Key
-
-
-_keyboard = Controller()
-
-
-def _get_clipboard() -> str:
-    try:
-        return pyperclip.paste()
-    except Exception:
-        return ""
-
-
-def _set_clipboard(text: str) -> None:
-    try:
-        pyperclip.copy(text)
-    except Exception:
-        pass
 
 
 def type_text(text: str) -> None:
-    """Insert *text* at the current cursor position via clipboard + ⌘V.
-
-    This approach works in any app (Terminal, browser, Notes, etc.) and
-    handles Unicode correctly. Requires Accessibility permission.
-    """
+    """Set clipboard and simulate Cmd+V in the frontmost application."""
     if not text:
         return
 
-    # Preserve whatever was on the clipboard before we clobber it.
-    previous = _get_clipboard()
+    pyperclip.copy(text)
+    time.sleep(0.05)
 
-    _set_clipboard(text)
-    time.sleep(0.05)  # Let clipboard settle
+    # AppleScript: tell the frontmost app to paste via Cmd+V
+    script = '''
+    tell application "System Events"
+        set frontApp to name of first application process whose frontmost is true
+        tell process frontApp
+            keystroke "v" using command down
+        end tell
+    end tell
+    '''
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, text=True, timeout=5,
+    )
 
-    # Simulate ⌘V
-    _keyboard.press(Key.cmd)
-    _keyboard.press("v")
-    _keyboard.release("v")
-    _keyboard.release(Key.cmd)
-
-    # Restore the previous clipboard after a short delay so the paste
-    # completes before we overwrite it again.
-    def _restore():
-        time.sleep(0.4)
-        _set_clipboard(previous)
-
-    threading.Thread(target=_restore, daemon=True).start()
+    if result.returncode != 0:
+        print(f"[murmur] Paste failed: {result.stderr.strip()}")
+        print(f"[murmur] Text is on clipboard — Cmd+V to paste manually.")
+    else:
+        print(f"[murmur] Pasted: {text[:60]}")

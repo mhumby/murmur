@@ -1,5 +1,6 @@
 """Transcriber — uses mlx-whisper for fast on-device inference on Apple Silicon."""
 
+import re
 import numpy as np
 
 # Model options (fastest → most accurate):
@@ -9,12 +10,14 @@ import numpy as np
 #   "mlx-community/whisper-large-v3-mlx"  most accurate, slower
 DEFAULT_MODEL = "mlx-community/whisper-base-mlx"
 
+# Regex to detect hallucination loops (same phrase repeated 3+ times)
+_LOOP_PATTERN = re.compile(r"(.{4,}?)\1{2,}")
+
 
 class Transcriber:
-    def __init__(self, model_name: str = DEFAULT_MODEL):
+    def __init__(self, model_name: str = DEFAULT_MODEL, language: str = "en"):
         self.model_name = model_name
-        self._model_loaded = False
-        # Model is loaded lazily on first transcription to keep startup fast.
+        self.language = language
 
     def transcribe(self, audio: np.ndarray) -> str:
         """Transcribe a float32 16 kHz audio array. Returns the text string."""
@@ -25,16 +28,22 @@ class Transcriber:
         if len(audio) < 8_000:
             return ""
 
-        import mlx_whisper  # noqa: PLC0415  (lazy import keeps startup fast)
+        import mlx_whisper
 
         result = mlx_whisper.transcribe(
             audio,
             path_or_hf_repo=self.model_name,
+            language=self.language,
             verbose=False,
         )
 
-        text: str = result.get("text", "")
-        return text.strip()
+        text: str = result.get("text", "").strip()
+
+        # Discard hallucination loops (e.g. "amíg滑 amíg滑 amíg滑...")
+        if _LOOP_PATTERN.search(text):
+            return ""
+
+        return text
 
     @property
     def model_display_name(self) -> str:

@@ -73,9 +73,9 @@ Required so Murmur can paste text into the focused app (it simulates `Cmd+V`).
 Edit the `HOTKEY` variable at the top of `app.py`:
 
 ```python
-HOTKEY = "<alt>space"          # Option + Space (default)
-HOTKEY = "<cmd><shift>d"       # Cmd + Shift + D
-HOTKEY = "<ctrl><shift>space"  # Ctrl + Shift + Space
+HOTKEY = "<alt>+<space>"          # Option + Space (default)
+HOTKEY = "<cmd>+<shift>+d"        # Cmd + Shift + D
+HOTKEY = "<ctrl>+<shift>+<space>" # Ctrl + Shift + Space
 ```
 
 ## Project structure
