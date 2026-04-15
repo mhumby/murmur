@@ -13,9 +13,14 @@ echo "Building $APP_NAME.app..."
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES"
 
-# --- Compile native launcher ---
-echo "Compiling launcher..."
-cc -o "$MACOS/murmur" launcher.c -framework Foundation
+# --- Compile Swift app ---
+echo "Compiling Swift..."
+swiftc -O \
+    -o "$MACOS/Murmur" \
+    swift/Murmur.swift \
+    -framework Cocoa \
+    -framework Carbon \
+    -framework ApplicationServices
 
 # --- Info.plist ---
 cat > "$CONTENTS/Info.plist" << 'PLIST'
@@ -30,11 +35,11 @@ cat > "$CONTENTS/Info.plist" << 'PLIST'
     <key>CFBundleIdentifier</key>
     <string>com.mhumby.murmur</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>1.3</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.3</string>
     <key>CFBundleExecutable</key>
-    <string>murmur</string>
+    <string>Murmur</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
@@ -52,10 +57,10 @@ echo ""
 echo "  Install:"
 echo "    cp -r $APP_DIR /Applications/"
 echo ""
-echo "  Grant permissions to Murmur (not Terminal):"
-echo "    System Settings > Privacy & Security > Accessibility > add Murmur"
-echo "    Microphone will be prompted on first use."
-echo ""
 echo "  Launch:"
 echo "    open /Applications/Murmur.app"
+echo ""
+echo "  On first launch, macOS will prompt for:"
+echo "    - Accessibility (for auto-paste)"
+echo "    - Microphone (for recording)"
 echo ""

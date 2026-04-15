@@ -1,34 +1,52 @@
 """Text inserter — pastes text into the focused app via clipboard + Cmd+V."""
 
-import subprocess
+import logging
 import time
 import pyperclip
+from Quartz import (
+    CGEventCreateKeyboardEvent,
+    CGEventSetFlags,
+    CGEventPost,
+    CGPreflightPostEventAccess,
+    kCGHIDEventTap,
+    kCGEventFlagMaskCommand,
+)
+
+log = logging.getLogger("murmur")
+
+V_KEY_CODE = 9  # macOS virtual key code for "V"
 
 
-def type_text(text: str) -> None:
-    """Set clipboard and simulate Cmd+V in the frontmost application."""
+def _simulate_cmd_v() -> bool:
+    """Simulate Cmd+V using Quartz CGEvent. Returns True if we have permission."""
+    if not CGPreflightPostEventAccess():
+        return False
+
+    event_down = CGEventCreateKeyboardEvent(None, V_KEY_CODE, True)
+    CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
+    CGEventPost(kCGHIDEventTap, event_down)
+
+    event_up = CGEventCreateKeyboardEvent(None, V_KEY_CODE, False)
+    CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
+    CGEventPost(kCGHIDEventTap, event_up)
+    return True
+
+
+def type_text(text: str) -> bool:
+    """Copy text to clipboard and attempt to paste via Cmd+V.
+
+    Returns True if auto-paste succeeded, False if clipboard-only.
+    """
     if not text:
-        return
+        return False
 
     pyperclip.copy(text)
+    log.info(f"Clipboard set: {text[:60]}")
     time.sleep(0.05)
 
-    # AppleScript: tell the frontmost app to paste via Cmd+V
-    script = '''
-    tell application "System Events"
-        set frontApp to name of first application process whose frontmost is true
-        tell process frontApp
-            keystroke "v" using command down
-        end tell
-    end tell
-    '''
-    result = subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True, text=True, timeout=5,
-    )
-
-    if result.returncode != 0:
-        print(f"[murmur] Paste failed: {result.stderr.strip()}")
-        print(f"[murmur] Text is on clipboard — Cmd+V to paste manually.")
+    if _simulate_cmd_v():
+        log.info("Pasted via CGEvent")
+        return True
     else:
-        print(f"[murmur] Pasted: {text[:60]}")
+        log.warning("No Accessibility permission — text on clipboard only")
+        return False

@@ -1,21 +1,24 @@
 #include <stdlib.h>
 #include <unistd.h>
-#include <libgen.h>
-#include <string.h>
 #include <stdio.h>
+#include <spawn.h>
+#include <sys/wait.h>
+
+extern char **environ;
 
 int main(int argc, char *argv[]) {
-    /* Resolve the project directory from the symlink-free executable path */
-    char path[4096];
-    uint32_t size = sizeof(path);
-    _NSGetExecutablePath(path, &size);
-
-    /* Go to project dir */
     chdir("/Users/mtalukder/dev-projects/murmur");
 
-    /* Exec Python */
-    execl(".venv/bin/python", "python", "app.py", NULL);
+    char *child_argv[] = {".venv/bin/python", "app.py", NULL};
+    pid_t pid;
 
-    perror("execl failed");
-    return 1;
+    int err = posix_spawn(&pid, child_argv[0], NULL, NULL, child_argv, environ);
+    if (err != 0) {
+        fprintf(stderr, "Murmur: failed to launch (%d)\n", err);
+        return 1;
+    }
+
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }

@@ -2,110 +2,192 @@
 
 Local voice-to-text dictation for macOS, powered by [Whisper](https://github.com/openai/whisper) running on Apple Silicon via [MLX](https://github.com/ml-explore/mlx).
 
-Press a hotkey, speak, release — your words appear wherever the cursor is. No cloud, no subscription, fully offline.
+Press `fn`, speak, press `fn` again — your words are transcribed and pasted wherever the cursor is. No cloud, no subscription, fully offline.
 
 ## Requirements
 
 - macOS on Apple Silicon (M1/M2/M3/M4)
+- Xcode Command Line Tools (`xcode-select --install`)
 - Python 3.13+ (via Homebrew: `brew install python@3.13`)
 
-## Quick start
+## Install
 
 ```bash
+git clone https://github.com/mhumby/murmur.git
 cd murmur
-./setup.sh     # creates venv, installs dependencies
-./run.sh       # launches Murmur in the menu bar
+./setup.sh        # creates Python venv, installs ML dependencies
+./build_app.sh    # compiles the native Swift app
+cp -r Murmur.app /Applications/
+open /Applications/Murmur.app
 ```
 
-The first time you record, Murmur downloads the Whisper model (~150 MB for "base"). After that it works fully offline.
+On first launch, macOS will prompt for:
+- **Accessibility** — required for auto-paste (simulates Cmd+V)
+- **Microphone** — required for recording
+- **Notifications** — optional, shows transcribed text
+
+The first recording downloads the Whisper model (~150 MB for "base"). After that it works fully offline.
 
 ## Usage
 
 | Action | How |
 |---|---|
-| **Start recording** | Press `Option + Space` (or click the menu bar icon) |
-| **Stop & transcribe** | Press `Option + Space` again |
-| **Switch model** | Menu bar > Whisper Model > pick one |
-| **Quit** | Menu bar > Quit |
+| **Start recording** | Press `fn` or `Option+Space` |
+| **Stop & transcribe** | Press `fn` or `Option+Space` again |
+| **Switch model** | Menu bar icon > Whisper Model |
+| **Quit** | Menu bar icon > Quit Murmur |
 
-The menu bar icon shows what Murmur is doing:
+### Menu bar icon
 
-- **microphone** — idle, ready to record
-- **red circle** — recording
-- **hourglass** — transcribing
+| Icon | Meaning |
+|---|---|
+| Microphone | Idle, ready to record |
+| Red circle | Recording — speak now |
+| Hourglass | Transcribing |
 
-Transcribed text is pasted at the current cursor position in whatever app is focused.
+A sound plays when recording starts (Tink) and stops (Pop).
+
+### Alternative: run from terminal
+
+If you prefer running from the terminal without building the .app:
+
+```bash
+./run.sh
+```
+
+This uses the Python-based menu bar app directly. Auto-paste works if your terminal app has Accessibility permission.
+
+## macOS setup
+
+### fn key
+
+By default, macOS maps the `fn`/Globe key to the emoji picker. To use it with Murmur:
+
+1. Open **System Settings** > **Keyboard**
+2. Set **"Press fn key to"** to **"Do Nothing"**
+
+### Accessibility troubleshooting
+
+If text doesn't auto-paste after transcription:
+
+1. Open **System Settings** > **Privacy & Security** > **Accessibility**
+2. Remove any old Murmur entries
+3. Click **+** and add **Murmur** from `/Applications/Murmur.app`
+4. Make sure the toggle is **on**
+5. Quit and relaunch Murmur
 
 ## Models
 
-Choose from the menu bar based on your speed/accuracy preference:
+Switch models from the menu bar:
 
-| Model | Size | Speed | Best for |
+| Model | Download size | Speed | Best for |
 |---|---|---|---|
 | **Tiny** | ~75 MB | Fastest | Quick notes, short commands |
 | **Base** | ~150 MB | Fast | General dictation (default) |
 | **Small** | ~500 MB | Moderate | Longer passages, accented speech |
 
-Models are downloaded once from Hugging Face and cached locally.
+Models are downloaded once from [Hugging Face](https://huggingface.co/mlx-community) and cached at `~/.cache/huggingface/hub/`.
 
-## macOS permissions
+## Architecture
 
-Murmur needs two permissions the first time you run it:
+Murmur is a **native Swift menu bar app** that calls Python only for ML inference:
 
-### Microphone
+```
+┌─────────────────────────────┐
+│    Murmur.app (Swift)       │
+│  - Menu bar + hotkey        │
+│  - Accessibility (CGEvent)  │
+│  - Clipboard + Cmd+V paste  │
+└──────────┬──────────────────┘
+           │ subprocess
+     ┌─────▼─────┐      ┌──────────────┐
+     │ record_cli │      │transcribe_cli│
+     │  (Python)  │      │   (Python)   │
+     │ sounddevice│      │  mlx-whisper │
+     └────────────┘      └──────────────┘
+```
 
-macOS prompts automatically. Click "Allow".
+1. **Hotkey** — Swift registers `fn` and `Option+Space` via `NSEvent` global monitor
+2. **Recording** — Python subprocess captures audio at 16 kHz, saves to WAV
+3. **Silence trimming** — trailing silence is stripped to prevent Whisper hallucinations
+4. **Transcription** — Python subprocess runs Whisper via `mlx-whisper`, prints text to stdout
+5. **Paste** — Swift reads the text, copies to clipboard, simulates `Cmd+V` via `CGEvent`
 
-### Accessibility
+All processing happens locally on-device.
 
-Required so Murmur can paste text into the focused app (it simulates `Cmd+V`).
+## Building the Swift app
 
-1. Open **System Settings** > **Privacy & Security** > **Accessibility**
-2. Click the **+** button
-3. Add the app you're launching Murmur from:
-   - If using **Terminal**: `/System/Applications/Utilities/Terminal.app`
-   - If using **iTerm2**: `/Applications/iTerm.app`
-   - If using **VS Code** terminal: `/Applications/Visual Studio Code.app`
-4. Make sure the toggle is **on**
+The Swift app is a single file at `swift/Murmur.swift`. To compile:
 
-## Changing the hotkey
+```bash
+./build_app.sh
+```
 
-Edit the `HOTKEY` variable at the top of `app.py`:
+This runs:
 
-```python
-HOTKEY = "<alt>+<space>"          # Option + Space (default)
-HOTKEY = "<cmd>+<shift>+d"        # Cmd + Shift + D
-HOTKEY = "<ctrl>+<shift>+<space>" # Ctrl + Shift + Space
+```bash
+swiftc -O \
+    -o Murmur.app/Contents/MacOS/Murmur \
+    swift/Murmur.swift \
+    -framework Cocoa \
+    -framework Carbon \
+    -framework ApplicationServices
+```
+
+The build script also generates the `Info.plist` (with `LSUIElement` to hide from the Dock) and ad-hoc signs the binary.
+
+To install after building:
+
+```bash
+cp -r Murmur.app /Applications/
+xattr -cr /Applications/Murmur.app    # clear quarantine if needed
+open /Applications/Murmur.app
 ```
 
 ## Project structure
 
 ```
 murmur/
-  app.py            — menu bar app, hotkey wiring, UI state machine
-  recorder.py       — microphone capture at 16 kHz via sounddevice
-  transcriber.py    — Whisper inference via mlx-whisper
-  text_inserter.py  — clipboard + Cmd+V paste into focused app
-  requirements.txt  — Python dependencies
-  setup.sh          — one-time setup script
-  run.sh            — launch script
+  swift/
+    Murmur.swift        native macOS app — menu bar, hotkey, paste
+  record_cli.py         audio recording subprocess (sounddevice → WAV)
+  transcribe_cli.py     transcription subprocess (mlx-whisper)
+  app.py                Python-based menu bar app (alternative to Swift)
+  recorder.py           audio recorder module (used by app.py)
+  transcriber.py        transcriber module (used by app.py)
+  text_inserter.py      text paste module (used by app.py)
+  build_app.sh          builds Murmur.app from Swift source
+  setup.sh              Python venv and dependency install
+  run.sh                launch Python-based app from terminal
+  requirements.txt      Python dependencies
 ```
 
 ## Troubleshooting
 
-**"No text appears after transcription"**
-- Check that Accessibility permission is granted for your terminal app (see above).
+**Text doesn't appear after transcription**
+- Check Accessibility permission for Murmur (see above)
+- If you previously had a Python-based Murmur in Accessibility, remove it and re-add the new one
 
-**"Recording but no transcription / empty result"**
-- Speak for at least 1 second — very short clips are discarded.
-- Check that your microphone is working: `python -c "import sounddevice; print(sounddevice.query_devices())"`.
+**fn key opens emoji picker**
+- Set "Press fn key to" to "Do Nothing" in System Settings > Keyboard
 
-**"Model download is slow"**
-- The first download comes from Hugging Face. Subsequent runs use the cached model at `~/.cache/huggingface/hub/`.
+**Empty transcription / no result**
+- Speak for at least 1 second — clips under 0.5s are discarded
+- Check your microphone: `python3 -c "import sounddevice; print(sounddevice.query_devices())"`
 
-**"High latency on transcription"**
-- Switch to the Tiny model from the menu bar for faster results.
-- Ensure no other heavy GPU workloads are running.
+**Hallucinated or repeated text**
+- Murmur filters hallucination loops automatically
+- Switch to the Small model for better accuracy
+
+**App shows "damaged" or won't open**
+- Run `xattr -cr /Applications/Murmur.app` to clear the quarantine flag
+
+**Logs**
+- View logs at `~/Library/Logs/Murmur.log`
+
+## Contributing
+
+Issues and suggestions are welcome. PRs require approval from the maintainer.
 
 ## License
 

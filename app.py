@@ -1,12 +1,17 @@
 """Murmur — local voice-to-text for macOS, powered by Whisper on Apple Silicon."""
 
+import logging
+import os
+import subprocess
 import threading
 import rumps
 from Cocoa import NSEvent, NSKeyDownMask, NSFlagsChangedMask, NSAlternateKeyMask, NSEventModifierFlagFunction
 
 from recorder import AudioRecorder
 from transcriber import Transcriber
-import text_inserter as text_typer
+import text_inserter
+
+log = logging.getLogger("murmur")
 
 # Hotkey: ⌥Space (Option + Space)
 HOTKEY_KEY_CODE = 49
@@ -23,6 +28,23 @@ MODEL_OPTIONS = {
     "Small (accurate)":  "mlx-community/whisper-small-mlx",
 }
 DEFAULT_MODEL_KEY = "Base  (balanced)"
+
+
+def _play_sound(name: str) -> None:
+    """Play a macOS system sound (non-blocking)."""
+    path = f"/System/Library/Sounds/{name}.aiff"
+    subprocess.Popen(["afplay", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _check_accessibility() -> bool:
+    """Check if we have Accessibility permission. If not, prompt the system dialog."""
+    from ApplicationServices import AXIsProcessTrustedWithOptions
+    from CoreFoundation import CFDictionaryCreate, kCFBooleanTrue
+    # kAXTrustedCheckOptionPrompt = True triggers the macOS system dialog
+    options = {
+        "AXTrustedCheckOptionPrompt": kCFBooleanTrue,
+    }
+    return AXIsProcessTrustedWithOptions(options)
 
 
 class MurmurApp(rumps.App):
@@ -51,17 +73,24 @@ class MurmurApp(rumps.App):
 
         self._register_hotkey()
 
+        # Check Accessibility on startup
+        if not _check_accessibility():
+            log.warning("Accessibility permission not granted — auto-paste will not work")
+            rumps.notification(
+                title="Murmur — Setup Required",
+                subtitle="Accessibility permission needed for auto-paste",
+                message="System Settings → Privacy & Security → Accessibility → add Python (or your terminal app). Without this, text is copied to clipboard only.",
+            )
+
     # ------------------------------------------------------------------
-    # Hotkey — uses Cocoa NSEvent global monitor (no Accessibility needed)
+    # Hotkey — uses Cocoa NSEvent global monitor
     # ------------------------------------------------------------------
 
     def _register_hotkey(self) -> None:
-        # ⌥Space
         NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
             NSKeyDownMask,
             self._handle_global_key,
         )
-        # fn (Globe) key — fires as a modifier flag change
         self._fn_was_down = False
         NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
             NSFlagsChangedMask,
@@ -75,7 +104,6 @@ class MurmurApp(rumps.App):
     def _handle_flags_changed(self, event) -> None:
         fn_down = bool(event.modifierFlags() & NSEventModifierFlagFunction)
         if fn_down and not self._fn_was_down:
-            # fn key just pressed — toggle recording
             rumps.Timer(self._toggle_recording_main_thread, 0).start()
         self._fn_was_down = fn_down
 
@@ -101,24 +129,37 @@ class MurmurApp(rumps.App):
         self.title = ICON_RECORDING
         self._toggle_item.title = f"Stop Recording  (click or {HOTKEY_DISPLAY})"
         self._recorder.start()
+        _play_sound("Tink")
+        log.info("Recording started")
 
     def _stop_recording(self) -> None:
         self._is_recording = False
         self.title = ICON_PROCESSING
         self._toggle_item.title = "Processing…"
         audio = self._recorder.stop()
+        _play_sound("Pop")
+        log.info("Recording stopped")
         threading.Thread(
             target=self._transcribe_and_type, args=(audio,), daemon=True
         ).start()
 
     def _transcribe_and_type(self, audio) -> None:
-        print(f"[murmur] Transcribing {len(audio)/16000:.1f}s of audio...")
+        log.info(f"Transcribing {len(audio)/16000:.1f}s of audio...")
         text = self._transcriber.transcribe(audio)
-        print(f"[murmur] Result: {text!r}")
+        log.info(f"Result: {text!r}")
         if text:
-            text_typer.type_text(text)
+            pasted = text_inserter.type_text(text)
+            if pasted:
+                rumps.notification("Murmur", "", text[:120])
+            else:
+                rumps.notification(
+                    "Murmur",
+                    "Copied to clipboard",
+                    f"{text[:100]}  — press Cmd+V to paste",
+                )
         else:
-            print("[murmur] No text detected.")
+            log.info("No text detected.")
+            rumps.notification("Murmur", "", "No speech detected — try again")
         rumps.Timer(self._reset_ui, 0).start()
 
     def _reset_ui(self, _timer) -> None:
@@ -138,4 +179,14 @@ class MurmurApp(rumps.App):
 
 
 if __name__ == "__main__":
+    log_path = os.path.expanduser("~/Library/Logs/Murmur.log")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_path),
+            logging.StreamHandler(),
+        ],
+    )
+    log.info("Murmur starting...")
     MurmurApp().run()

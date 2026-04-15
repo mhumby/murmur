@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+Murmur.app/
+launcher
+.murmur_recording.wav

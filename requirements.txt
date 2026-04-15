@@ -3,3 +3,5 @@ sounddevice>=0.4.6
 numpy>=1.24.0
 mlx-whisper>=0.4.0   # mlx is Apple Silicon only — pulls in torch, mlx, huggingface_hub
 pyperclip>=1.8.2
+pyobjc-framework-Quartz>=9.0
+pyobjc-framework-ApplicationServices>=9.0
