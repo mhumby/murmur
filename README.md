@@ -4,6 +4,14 @@ Local voice-to-text dictation for macOS, powered by [Whisper](https://github.com
 
 Press `fn`, speak, press `fn` again — your words are transcribed and pasted wherever the cursor is. No cloud, no subscription, fully offline.
 
+## Why I built this
+
+I work remotely, which means everything happens through Slack, email, and text — voice calls are rarely an option. Being able to type as fast as I think matters a lot.
+
+I started using a popular AI dictation app to keep up. It worked well enough, but at £19/month it costs as much as a full AI assistant like ChatGPT or Claude. The free tier came with a 2,000 word limit, which disappeared fast. Even on the paid plan, punctuation was hit-or-miss — full stops and commas would often go missing, turning spoken sentences into one long run-on that needed heavy editing afterwards.
+
+So I built Murmur instead. It runs entirely on-device using OpenAI's Whisper model, optimised for Apple Silicon via MLX. No subscription, no word limits, no audio leaving your machine.
+
 ## Requirements
 
 - macOS on Apple Silicon (M1/M2/M3/M4)

@@ -7,11 +7,21 @@ CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_PATH="$SCRIPT_DIR/.venv"
 
 echo "Building $APP_NAME.app..."
 
+if [ ! -f "$VENV_PATH/bin/python" ]; then
+    echo "Error: .venv not found. Run ./setup.sh first."
+    exit 1
+fi
+
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES"
+
+# --- Bundle Python scripts into Resources ---
+cp record_cli.py "$RESOURCES/"
+cp transcribe_cli.py "$RESOURCES/"
 
 # --- Compile Swift app ---
 echo "Compiling Swift..."
@@ -22,8 +32,8 @@ swiftc -O \
     -framework Carbon \
     -framework ApplicationServices
 
-# --- Info.plist ---
-cat > "$CONTENTS/Info.plist" << 'PLIST'
+# --- Info.plist (MurmurVenvPath written at build time) ---
+cat > "$CONTENTS/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -44,6 +54,8 @@ cat > "$CONTENTS/Info.plist" << 'PLIST'
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Murmur needs microphone access to record your voice for transcription.</string>
+    <key>MurmurVenvPath</key>
+    <string>$VENV_PATH</string>
 </dict>
 </plist>
 PLIST

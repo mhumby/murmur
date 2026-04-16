@@ -4,9 +4,27 @@ import UserNotifications
 
 // MARK: - Configuration
 
-let projectDir = "\(NSHomeDirectory())/dev-projects/murmur"
-let pythonPath = "\(projectDir)/.venv/bin/python"
-let transcribeScript = "\(projectDir)/transcribe_cli.py"
+/// Python scripts are bundled inside Murmur.app/Contents/Resources/.
+/// The .venv path is read from Info.plist (MurmurVenvPath), written at build time by build_app.sh.
+/// This means the app works from /Applications regardless of where the repo is cloned.
+
+let bundle = Bundle.main
+let resourcePath = bundle.resourcePath!
+
+// Python scripts — always found inside the bundle
+let recordScript    = "\(resourcePath)/record_cli.py"
+let transcribeScript = "\(resourcePath)/transcribe_cli.py"
+
+// .venv path — encoded in Info.plist at build time
+let pythonPath: String = {
+    if let venv = bundle.infoDictionary?["MurmurVenvPath"] as? String {
+        return "\(venv)/bin/python"
+    }
+    // Fallback: look next to the .app bundle
+    let appDir = bundle.bundlePath.components(separatedBy: "/").dropLast().joined(separator: "/")
+    return "\(appDir)/.venv/bin/python"
+}()
+
 let logPath = "\(NSHomeDirectory())/Library/Logs/Murmur.log"
 
 // MARK: - Logger
@@ -38,7 +56,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var toggleItem: NSMenuItem!
     var isRecording = false
     var audioProcess: Process?
-    var tempAudioFile: String { "\(projectDir)/.murmur_recording.wav" }
+    var tempAudioFile: String {
+        let tmp = FileManager.default.temporaryDirectory
+        return "\(tmp.path)/murmur_recording.wav"
+    }
 
     // Model selection
     var currentModel = "mlx-community/whisper-base-mlx"
@@ -141,8 +162,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Fallback: use Python script for recording
         let process = Process()
         process.executableURL = URL(fileURLWithPath: pythonPath)
-        process.arguments = ["\(projectDir)/record_cli.py", tempAudioFile]
-        process.currentDirectoryURL = URL(fileURLWithPath: projectDir)
+        process.arguments = [recordScript, tempAudioFile]
+        process.currentDirectoryURL = URL(fileURLWithPath: resourcePath)
 
         do {
             try process.run()
@@ -182,7 +203,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: pythonPath)
         process.arguments = [transcribeScript, tempAudioFile, currentModel]
-        process.currentDirectoryURL = URL(fileURLWithPath: projectDir)
+        process.currentDirectoryURL = URL(fileURLWithPath: resourcePath)
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
 
@@ -249,6 +270,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func resetUI() {
+        isRecording = false
+        audioProcess = nil
         statusItem.button?.title = "🎤"
         toggleItem.title = "Start Recording  (fn)"
     }
