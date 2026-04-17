@@ -25,9 +25,10 @@ git clone https://github.com/mhumby/murmur.git
 cd murmur
 ./setup.sh        # creates Python venv, installs ML dependencies
 ./build_app.sh    # compiles the native Swift app
-cp -r Murmur.app /Applications/
-open /Applications/Murmur.app
+./install.sh      # installs to /Applications, resets permissions, launches
 ```
+
+> `install.sh` also resets the macOS permission entries for Murmur so the app re-prompts cleanly on upgrade. Without it, an older granted permission can silently stop working after a rebuild because the ad-hoc signature changed.
 
 On first launch, macOS will prompt for:
 - **Accessibility** — required for auto-paste (simulates Cmd+V)
@@ -144,13 +145,13 @@ swiftc -O \
 
 The build script also generates the `Info.plist` (with `LSUIElement` to hide from the Dock) and ad-hoc signs the binary.
 
-To install after building:
+To install after building, use `install.sh`:
 
 ```bash
-cp -r Murmur.app /Applications/
-xattr -cr /Applications/Murmur.app    # clear quarantine if needed
-open /Applications/Murmur.app
+./install.sh
 ```
+
+This quits any running instance, copies the new build to `/Applications/`, resets the TCC permission entries for `com.mhumby.murmur` (so macOS re-prompts cleanly instead of silently using a stale entry tied to the previous ad-hoc signature), and launches the app.
 
 ## Project structure
 
@@ -165,6 +166,7 @@ murmur/
   transcriber.py        transcriber module (used by app.py)
   text_inserter.py      text paste module (used by app.py)
   build_app.sh          builds Murmur.app from Swift source
+  install.sh            installs to /Applications and resets TCC permissions
   setup.sh              Python venv and dependency install
   run.sh                launch Python-based app from terminal
   requirements.txt      Python dependencies
