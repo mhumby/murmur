@@ -1,5 +1,6 @@
 import Cocoa
 import Carbon
+import Darwin
 import UserNotifications
 
 // MARK: - Configuration
@@ -208,8 +209,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if waitForExit(process, timeout: 1.0) { return }
 
         logger.log("[WARNING] Recorder ignored SIGTERM — sending SIGKILL")
-        kill(process.processIdentifier, SIGKILL)
-        process.waitUntilExit()
+        if kill(process.processIdentifier, SIGKILL) != 0 {
+            let err = errno
+            let msg = String(cString: strerror(err))
+            logger.log("[ERROR] SIGKILL failed for pid \(process.processIdentifier): errno \(err) (\(msg))")
+            return
+        }
+        if waitForExit(process, timeout: 1.0) { return }
+        logger.log("[ERROR] Recorder did not exit within timeout after SIGKILL — giving up")
     }
 
     private func waitForExit(_ process: Process, timeout: TimeInterval) -> Bool {
