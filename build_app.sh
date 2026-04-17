@@ -55,6 +55,9 @@ swiftc -O \
     swift/Transcribers.swift \
     swift/AppState.swift \
     swift/MainWindow.swift \
+    swift/HistoryStore.swift \
+    swift/KeychainHelper.swift \
+    swift/SettingsStore.swift \
     -framework Cocoa \
     -framework Carbon \
     -framework ApplicationServices \

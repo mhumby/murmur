@@ -12,13 +12,27 @@ class AppState: ObservableObject {
     /// All local Whisper models the user can choose from.
     let localModels: [(label: String, id: String)]
 
+    /// Persistent transcription history. Observed by the UI and appended to
+    /// by AppDelegate after each successful transcription.
+    let history: HistoryStore
+
+    /// API keys and user preferences (Keychain-backed).
+    let settings: SettingsStore
+
     /// Fires when the user picks a different local model. AppDelegate hooks
     /// this up to rebuild `transcriber` via `makeTranscriber(forLocalModel:)`.
     var onLocalModelChange: ((String) -> Void)?
 
-    init(currentModelID: String, localModels: [(label: String, id: String)]) {
+    init(
+        currentModelID: String,
+        localModels: [(label: String, id: String)],
+        history: HistoryStore = HistoryStore(),
+        settings: SettingsStore = SettingsStore()
+    ) {
         self.currentModelID = currentModelID
         self.localModels = localModels
+        self.history = history
+        self.settings = settings
     }
 
     /// Entry point for UI to select a local model. Updates state and fires

@@ -299,6 +299,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         logger.log("[INFO] Result: \"\(text)\"")
 
+        // Persist to history (no-op for empty text; store trims & skips).
+        let modelName = backend.displayName
+        DispatchQueue.main.async {
+            self.appState.history.append(modelDisplayName: modelName, text: text)
+        }
+
         if text.isEmpty {
             DispatchQueue.main.async {
                 self.showNotification(title: "Murmur", body: "No speech detected")
