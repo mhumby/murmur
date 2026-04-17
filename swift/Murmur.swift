@@ -16,12 +16,22 @@ let resourcePath = bundle.resourcePath!
 let recordScript    = "\(resourcePath)/record_cli.py"
 let transcribeScript = "\(resourcePath)/transcribe_cli.py"
 
-// .venv path — encoded in Info.plist at build time
+// Python interpreter resolution, in priority order:
+//   1. Bundled venv inside Resources/venv — lets the .app be distributed
+//      standalone (e.g. via GitHub Releases).
+//   2. MurmurVenvPath from Info.plist — the absolute dev-machine venv path
+//      written at build time. Used when the bundled venv is absent.
+//   3. Sibling .venv next to the .app — last-resort fallback for running
+//      straight out of the repo.
 let pythonPath: String = {
+    let fm = FileManager.default
+    let bundledVenv = "\(resourcePath)/venv/bin/python"
+    if fm.fileExists(atPath: bundledVenv) {
+        return bundledVenv
+    }
     if let venv = bundle.infoDictionary?["MurmurVenvPath"] as? String {
         return "\(venv)/bin/python"
     }
-    // Fallback: look next to the .app bundle
     let appDir = bundle.bundlePath.components(separatedBy: "/").dropLast().joined(separator: "/")
     return "\(appDir)/.venv/bin/python"
 }()

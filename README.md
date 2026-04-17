@@ -143,7 +143,11 @@ swiftc -O \
     -framework ApplicationServices
 ```
 
-The build script also generates the `Info.plist` (with `LSUIElement` to hide from the Dock) and ad-hoc signs the binary.
+The build script also:
+
+- Generates the `Info.plist` (version from `VERSION`, `LSUIElement` to hide from the Dock, copyright for the About dialog).
+- Bundles the Python `.venv` into `Murmur.app/Contents/Resources/venv/`, making the app self-contained (~800 MB bundle size). This means a built `Murmur.app` can be copied to another Apple Silicon Mac with Homebrew Python 3.13 installed and just work — no `git clone` or `setup.sh` required on the target machine.
+- Ad-hoc signs the binary.
 
 To install after building, use `install.sh`:
 

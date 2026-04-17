@@ -35,6 +35,18 @@ mkdir -p "$MACOS" "$RESOURCES"
 cp record_cli.py "$RESOURCES/"
 cp transcribe_cli.py "$RESOURCES/"
 
+# --- Bundle the Python venv into Resources so the .app is self-contained ---
+# The bundled venv still relies on Homebrew Python 3.13 being present on the
+# target Mac (/opt/homebrew/opt/python@3.13/bin/python3.13), via the symlink
+# inside bin/ and the `home` entry in pyvenv.cfg. This is already a stated
+# requirement. Wheels and site-packages travel with the app.
+echo "Bundling venv into Resources (this can take a moment)..."
+cp -R "$VENV_PATH" "$RESOURCES/venv"
+
+# Trim cruft we don't need at runtime to keep the bundle small.
+find "$RESOURCES/venv" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
+find "$RESOURCES/venv" -type f -name "*.pyc" -delete 2>/dev/null || true
+
 # --- Compile Swift app ---
 echo "Compiling Swift..."
 swiftc -O \
