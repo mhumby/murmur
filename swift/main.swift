@@ -80,7 +80,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ("Small (accurate)", "mlx-community/whisper-small-mlx"),
     ]
 
+    // Active transcription backend — rebuilt whenever the user changes model.
+    // Currently always a LocalMLXTranscriber; OpenAITranscriber joins the
+    // roster in PR 15.
+    var transcriber: Transcriber!
+
+    /// Build a Transcriber for the given local model ID. Kept as a factory
+    /// so PR 15 can extend this to return an OpenAITranscriber when the user
+    /// picks the online option.
+    func makeTranscriber(forLocalModel modelID: String) -> Transcriber {
+        // Extract a short label like "Tiny"/"Base"/"Small" from the menu
+        // label corresponding to this model ID. Falls back to the ID.
+        let label = models.first { $0.id == modelID }
+            .map { $0.label.split(separator: " ").first.map(String.init) ?? $0.label }
+            ?? modelID
+        return LocalMLXTranscriber(
+            modelID: modelID,
+            modelLabel: label,
+            pythonPath: pythonPath,
+            scriptPath: transcribeScript,
+            workingDir: resourcePath
+        )
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Build the initial transcriber for the default model.
+        transcriber = makeTranscriber(forLocalModel: currentModel)
+
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
@@ -246,27 +272,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func transcribeAndPaste() {
-        logger.log("[INFO] Transcribing...")
+        let backend = transcriber!  // snapshot so a mid-transcription model change is harmless
+        logger.log("[INFO] Transcribing via \(backend.displayName)...")
 
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: pythonPath)
-        process.arguments = [transcribeScript, tempAudioFile, currentModel]
-        process.currentDirectoryURL = URL(fileURLWithPath: resourcePath)
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
+        let text: String
         do {
-            try process.run()
-            process.waitUntilExit()
+            text = try backend.transcribe(audioPath: tempAudioFile)
         } catch {
             logger.log("[ERROR] Transcription failed: \(error)")
             DispatchQueue.main.async { self.resetUI() }
             return
         }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         logger.log("[INFO] Result: \"\(text)\"")
 
@@ -369,11 +385,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func selectModel(_ sender: NSMenuItem) {
         currentModel = models[sender.tag].id
+        transcriber = makeTranscriber(forLocalModel: currentModel)
         if let menu = sender.menu {
             for item in menu.items { item.state = .off }
         }
         sender.state = .on
-        logger.log("[INFO] Model changed to \(currentModel)")
+        logger.log("[INFO] Model changed to \(transcriber.displayName) (\(currentModel))")
     }
 }
 

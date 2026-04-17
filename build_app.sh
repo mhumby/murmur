@@ -51,7 +51,8 @@ find "$RESOURCES/venv" -type f -name "*.pyc" -delete 2>/dev/null || true
 echo "Compiling Swift..."
 swiftc -O \
     -o "$MACOS/Murmur" \
-    swift/Murmur.swift \
+    swift/main.swift \
+    swift/Transcribers.swift \
     -framework Cocoa \
     -framework Carbon \
     -framework ApplicationServices

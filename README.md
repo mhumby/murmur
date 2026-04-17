@@ -141,7 +141,7 @@ All processing happens locally on-device.
 
 ## Building the Swift app
 
-The Swift app is a single file at `swift/Murmur.swift`. To compile:
+The Swift app lives in `swift/` and is split across a small number of files (entry point + AppDelegate in `main.swift`, transcription backends in `Transcribers.swift`). To compile:
 
 ```bash
 ./build_app.sh
@@ -152,7 +152,8 @@ This runs:
 ```bash
 swiftc -O \
     -o Murmur.app/Contents/MacOS/Murmur \
-    swift/Murmur.swift \
+    swift/main.swift \
+    swift/Transcribers.swift \
     -framework Cocoa \
     -framework Carbon \
     -framework ApplicationServices
@@ -177,7 +178,8 @@ This quits any running instance, copies the new build to `/Applications/`, reset
 ```
 murmur/
   swift/
-    Murmur.swift        native macOS app — menu bar, hotkey, paste
+    main.swift          native macOS app — menu bar, hotkey, paste
+    Transcribers.swift  transcription backends (local MLX, OpenAI stub)
   record_cli.py         audio recording subprocess (sounddevice → WAV)
   transcribe_cli.py     transcription subprocess (mlx-whisper)
   app.py                Python-based menu bar app (alternative to Swift)
