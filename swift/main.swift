@@ -85,6 +85,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // roster in PR 15.
     var transcriber: Transcriber!
 
+    // Main window's observable state + controller. The window is created
+    // lazily the first time the user opens it.
+    var appState: AppState!
+    var mainWindowController: MainWindowController!
+
     /// Build a Transcriber for the given local model ID. Kept as a factory
     /// so PR 15 can extend this to return an OpenAITranscriber when the user
     /// picks the online option.
@@ -106,6 +111,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Build the initial transcriber for the default model.
         transcriber = makeTranscriber(forLocalModel: currentModel)
+
+        // Build the observable state for the main window. When the user
+        // picks a model in the window, rebuild the transcriber.
+        appState = AppState(currentModelID: currentModel, localModels: models)
+        appState.onLocalModelChange = { [weak self] modelID in
+            guard let self = self else { return }
+            self.currentModel = modelID
+            self.transcriber = self.makeTranscriber(forLocalModel: modelID)
+            logger.log("[INFO] Model changed to \(self.transcriber.displayName) (\(modelID))")
+        }
+        mainWindowController = MainWindowController(state: appState)
 
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -132,17 +148,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let modelMenu = NSMenu()
-        for (i, model) in models.enumerated() {
-            let item = NSMenuItem(title: model.label, action: #selector(selectModel(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = i
-            item.state = model.id == currentModel ? .on : .off
-            modelMenu.addItem(item)
-        }
-        let modelItem = NSMenuItem(title: "Whisper Model", action: nil, keyEquivalent: "")
-        modelItem.submenu = modelMenu
-        menu.addItem(modelItem)
+        // Model selection and history now live in the main window.
+        let openWindowItem = NSMenuItem(
+            title: "Open Murmur…",
+            action: #selector(openMainWindow),
+            keyEquivalent: ","
+        )
+        openWindowItem.target = self
+        menu.addItem(openWindowItem)
 
         menu.addItem(.separator())
 
@@ -381,16 +394,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.orderFrontStandardAboutPanel(options: options)
     }
 
-    // MARK: - Model selection
+    // MARK: - Main window
 
-    @objc func selectModel(_ sender: NSMenuItem) {
-        currentModel = models[sender.tag].id
-        transcriber = makeTranscriber(forLocalModel: currentModel)
-        if let menu = sender.menu {
-            for item in menu.items { item.state = .off }
-        }
-        sender.state = .on
-        logger.log("[INFO] Model changed to \(transcriber.displayName) (\(currentModel))")
+    @objc func openMainWindow() {
+        mainWindowController.show()
     }
 }
 

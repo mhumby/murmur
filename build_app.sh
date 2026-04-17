@@ -53,9 +53,12 @@ swiftc -O \
     -o "$MACOS/Murmur" \
     swift/main.swift \
     swift/Transcribers.swift \
+    swift/AppState.swift \
+    swift/MainWindow.swift \
     -framework Cocoa \
     -framework Carbon \
-    -framework ApplicationServices
+    -framework ApplicationServices \
+    -framework SwiftUI
 
 # --- Info.plist (MurmurVenvPath written at build time) ---
 cat > "$CONTENTS/Info.plist" << PLIST
