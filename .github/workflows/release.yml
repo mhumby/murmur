@@ -1,0 +1,112 @@
+name: Release
+
+# Triggers on tags that match vX.Y.Z (semver).
+# The VERSION file in the repo should match the tag (without the leading v).
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build-and-release:
+    # macos-14 runners are Apple Silicon (arm64), which Murmur requires
+    # because MLX only targets Apple Silicon.
+    runs-on: macos-14
+
+    permissions:
+      contents: write  # needed to create the release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches VERSION file
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          echo "Tag: $TAG"
+          echo "VERSION file: $FILE_VERSION"
+          if [ "$TAG" != "$FILE_VERSION" ]; then
+            echo "::error::Tag ($TAG) does not match VERSION file ($FILE_VERSION)."
+            echo "Bump VERSION and retag before releasing."
+            exit 1
+          fi
+
+      - name: Install Homebrew Python 3.13
+        run: |
+          brew update
+          brew install python@3.13
+          # Sanity check: the path Murmur's build script expects
+          test -x /opt/homebrew/opt/python@3.13/bin/python3.13
+
+      - name: Create venv and install dependencies
+        run: ./setup.sh
+
+      - name: Build Murmur.app
+        run: ./build_app.sh
+
+      - name: Verify bundled venv imports mlx_whisper
+        run: |
+          Murmur.app/Contents/Resources/venv/bin/python -c \
+            "import sys; print('prefix:', sys.prefix); import mlx_whisper; print('mlx_whisper OK')"
+
+      - name: Zip the app (preserving symlinks and signature)
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          ZIP_NAME="Murmur-${VERSION}.zip"
+          # ditto preserves symlinks, extended attributes, and the ad-hoc
+          # signature correctly — plain `zip` can corrupt bundled macOS apps.
+          ditto -c -k --sequesterRsrc --keepParent Murmur.app "$ZIP_NAME"
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          ls -lh "$ZIP_NAME"
+
+      - name: Compute SHA-256
+        run: |
+          shasum -a 256 "$ZIP_NAME" | tee "${ZIP_NAME}.sha256"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          cat > release-notes.md <<EOF
+          ## Murmur v${VERSION}
+
+          Prebuilt, self-contained \`Murmur.app\` for Apple Silicon macOS.
+
+          ### Install
+
+          \`\`\`bash
+          # 1. Unzip
+          unzip Murmur-${VERSION}.zip
+
+          # 2. Move to Applications
+          mv Murmur.app /Applications/
+
+          # 3. Clear the quarantine flag (required for ad-hoc signed apps
+          #    downloaded from the internet)
+          xattr -cr /Applications/Murmur.app
+
+          # 4. Launch
+          open /Applications/Murmur.app
+          \`\`\`
+
+          On first launch, macOS will prompt for Accessibility and Microphone.
+
+          ### Requirements
+
+          - Apple Silicon (M1/M2/M3/M4)
+          - Homebrew Python 3.13: \`brew install python@3.13\`
+
+          ### Checksums
+
+          \`\`\`
+          $(cat "${ZIP_NAME}.sha256")
+          \`\`\`
+          EOF
+
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Murmur v${VERSION}" \
+            --notes-file release-notes.md \
+            "$ZIP_NAME" \
+            "${ZIP_NAME}.sha256"

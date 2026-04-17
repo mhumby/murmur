@@ -20,6 +20,21 @@ So I built Murmur instead. It runs entirely on-device using OpenAI's Whisper mod
 
 ## Install
 
+### Option 1 — Download a prebuilt release (easiest)
+
+Grab the latest `Murmur-X.Y.Z.zip` from [Releases](https://github.com/mhumby/murmur/releases), then:
+
+```bash
+unzip Murmur-X.Y.Z.zip
+mv Murmur.app /Applications/
+xattr -cr /Applications/Murmur.app       # clear the download quarantine flag
+open /Applications/Murmur.app
+```
+
+The prebuilt app is self-contained but still needs Homebrew Python 3.13 on your Mac: `brew install python@3.13`.
+
+### Option 2 — Build from source
+
 ```bash
 git clone https://github.com/mhumby/murmur.git
 cd murmur
@@ -217,12 +232,24 @@ Release workflow:
 
 ```bash
 # 1. Bump the file (commit as part of your change PR)
-echo "1.4.1" > VERSION
+echo "1.6.1" > VERSION
 
 # 2. After the PR merges to main, tag and push
-git tag v1.4.1
-git push origin v1.4.1
+git tag v1.6.1
+git push origin v1.6.1
 ```
+
+Pushing a `v*.*.*` tag triggers `.github/workflows/release.yml`, which:
+
+1. Verifies the tag matches the `VERSION` file (hard fails otherwise).
+2. Installs Homebrew Python 3.13 on the macOS-14 runner.
+3. Runs `./setup.sh` and `./build_app.sh`.
+4. Verifies the bundled venv can import `mlx_whisper`.
+5. Packages `Murmur.app` with `ditto` (preserves symlinks and the ad-hoc signature — `zip` can corrupt macOS app bundles).
+6. Computes a SHA-256 checksum.
+7. Creates a GitHub Release with the `.zip`, the `.sha256`, and install instructions.
+
+No manual release steps needed beyond the tag push.
 
 ## Contributing
 
