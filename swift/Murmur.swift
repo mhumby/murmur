@@ -112,9 +112,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Version (read from Info.plist, injected at build time from the VERSION file)
         let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let versionItem = NSMenuItem(title: "Murmur v\(version)", action: nil, keyEquivalent: "")
-        versionItem.isEnabled = false
-        menu.addItem(versionItem)
+
+        let aboutItem = NSMenuItem(title: "About Murmur", action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
 
         let quitItem = NSMenuItem(title: "Quit Murmur", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quitItem)
@@ -312,6 +313,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         audioProcess = nil
         statusItem.button?.title = "🎤"
         toggleItem.title = "Start Recording  (fn)"
+    }
+
+    // MARK: - About
+
+    @objc func showAbout() {
+        let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let copyright = bundle.infoDictionary?["NSHumanReadableCopyright"] as? String
+            ?? "© 2026 2M Tech"
+
+        // Credits: MIT license notice, shown in the scrollable area of the About panel.
+        let credits = """
+        Murmur — local voice-to-text dictation for macOS.
+
+        Licensed under the MIT License.
+
+        Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+        The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+        """
+
+        let creditsAttr = NSAttributedString(
+            string: credits,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
+
+        let options: [NSApplication.AboutPanelOptionKey: Any] = [
+            .applicationName: "Murmur",
+            .applicationVersion: version,
+            .version: version,
+            .credits: creditsAttr,
+            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): copyright,
+        ]
+
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: options)
     }
 
     // MARK: - Model selection

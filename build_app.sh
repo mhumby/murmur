@@ -66,6 +66,8 @@ cat > "$CONTENTS/Info.plist" << PLIST
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Murmur needs microphone access to record your voice for transcription.</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 2M Tech. Released under the MIT License.</string>
     <key>MurmurVenvPath</key>
     <string>$VENV_PATH</string>
 </dict>
