@@ -193,6 +193,31 @@ murmur/
 **Logs**
 - View logs at `~/Library/Logs/Murmur.log`
 
+## Versioning
+
+Murmur follows [Semantic Versioning](https://semver.org): `MAJOR.MINOR.PATCH`.
+
+The version lives in a single `VERSION` file at the repo root. `build_app.sh` reads it and injects the value into `CFBundleVersion` and `CFBundleShortVersionString` in the generated `Info.plist`, so the menu bar "Murmur vX.Y.Z" entry, the startup log line, and the macOS "About" dialog all stay in sync.
+
+When to bump which component:
+
+| Component | When to bump | Example |
+|---|---|---|
+| **MAJOR** | Breaking change users must act on (e.g. new required permission, changed hotkey, incompatible config) | `1.4.0` to `2.0.0` |
+| **MINOR** | New feature, backwards compatible (e.g. new model, new hotkey option, UI addition) | `1.4.0` to `1.5.0` |
+| **PATCH** | Bug fix or internal refactor, no user-visible change | `1.4.0` to `1.4.1` |
+
+Release workflow:
+
+```bash
+# 1. Bump the file (commit as part of your change PR)
+echo "1.4.1" > VERSION
+
+# 2. After the PR merges to main, tag and push
+git tag v1.4.1
+git push origin v1.4.1
+```
+
 ## Contributing
 
 Issues and suggestions are welcome. PRs require approval from the maintainer.

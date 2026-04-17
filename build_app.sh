@@ -9,7 +9,19 @@ RESOURCES="$CONTENTS/Resources"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_PATH="$SCRIPT_DIR/.venv"
 
-echo "Building $APP_NAME.app..."
+# --- Read version from VERSION file (single source of truth) ---
+VERSION_FILE="$SCRIPT_DIR/VERSION"
+if [ ! -f "$VERSION_FILE" ]; then
+    echo "Error: VERSION file not found at $VERSION_FILE"
+    exit 1
+fi
+VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "Error: VERSION must be MAJOR.MINOR.PATCH (got: '$VERSION')"
+    exit 1
+fi
+
+echo "Building $APP_NAME.app v$VERSION..."
 
 if [ ! -f "$VENV_PATH/bin/python" ]; then
     echo "Error: .venv not found. Run ./setup.sh first."
@@ -45,9 +57,9 @@ cat > "$CONTENTS/Info.plist" << PLIST
     <key>CFBundleIdentifier</key>
     <string>com.mhumby.murmur</string>
     <key>CFBundleVersion</key>
-    <string>1.3</string>
+    <string>$VERSION</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.3</string>
+    <string>$VERSION</string>
     <key>CFBundleExecutable</key>
     <string>Murmur</string>
     <key>LSUIElement</key>

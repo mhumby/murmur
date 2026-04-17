@@ -109,6 +109,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(modelItem)
 
         menu.addItem(.separator())
+
+        // Version (read from Info.plist, injected at build time from the VERSION file)
+        let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let versionItem = NSMenuItem(title: "Murmur v\(version)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
+
         let quitItem = NSMenuItem(title: "Quit Murmur", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quitItem)
 
@@ -126,7 +133,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        logger.log("[INFO] Murmur started")
+        logger.log("[INFO] Murmur v\(version) started")
     }
 
     // MARK: - fn key handling
