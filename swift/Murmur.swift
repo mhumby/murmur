@@ -183,17 +183,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Play stop sound
         NSSound(named: "Pop")?.play()
 
-        // Stop the recording process
-        audioProcess?.interrupt()
-        audioProcess?.waitUntilExit()
+        // Hand off the recorder to a background queue so the main thread
+        // stays responsive even if the subprocess is slow to exit.
+        let process = audioProcess
         audioProcess = nil
 
-        logger.log("[INFO] Recording stopped")
-
-        // Transcribe in background
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.shutdownRecorder(process)
+            logger.log("[INFO] Recording stopped")
             self?.transcribeAndPaste()
         }
+    }
+
+    /// Escalate through SIGINT → SIGTERM → SIGKILL so a wedged recorder
+    /// can never hang the app the way it did before this fix.
+    func shutdownRecorder(_ process: Process?) {
+        guard let process = process, process.isRunning else { return }
+
+        process.interrupt()  // SIGINT — graceful stop
+        if waitForExit(process, timeout: 2.0) { return }
+
+        logger.log("[WARNING] Recorder ignored SIGINT — sending SIGTERM")
+        process.terminate()  // SIGTERM
+        if waitForExit(process, timeout: 1.0) { return }
+
+        logger.log("[WARNING] Recorder ignored SIGTERM — sending SIGKILL")
+        kill(process.processIdentifier, SIGKILL)
+        process.waitUntilExit()
+    }
+
+    private func waitForExit(_ process: Process, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return !process.isRunning
     }
 
     func transcribeAndPaste() {
