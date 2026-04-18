@@ -4,6 +4,8 @@ Local voice-to-text dictation for macOS, powered by [Whisper](https://github.com
 
 Press `fn`, speak, press `fn` again — your words are transcribed and pasted wherever the cursor is.
 
+![Murmur main window](docs/screenshot.png)
+
 **Works fully offline by default.** Online features (OpenAI transcription and proofread) are optional and require an API key you supply yourself.
 
 ---
@@ -303,4 +305,7 @@ Issues and suggestions are welcome. PRs require approval from the maintainer.
 
 ## License
 
-MIT
+Copyright (c) 2026 2M Tech. All rights reserved.
+
+This is proprietary software. Unauthorized copying, distribution, or use is prohibited.
+See [LICENSE](LICENSE) for details.
