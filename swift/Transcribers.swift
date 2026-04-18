@@ -68,16 +68,118 @@ class LocalMLXTranscriber: Transcriber {
     }
 }
 
-// MARK: - Online (OpenAI) — stub, wired up in PR 15
+// MARK: - Online (OpenAI)
 
-/// Placeholder for OpenAI gpt-4o-transcribe. Full URLSession + Keychain
-/// implementation lands in PR 15 (feat/online-transcription).
+/// Transcribes via OpenAI's `/v1/audio/transcriptions` endpoint
+/// (model: gpt-4o-transcribe). Uses multipart/form-data with the bundled
+/// WAV file. Synchronous — blocks the calling thread until the response
+/// arrives or the request times out, matching the Transcriber contract.
 class OpenAITranscriber: Transcriber {
-    var displayName: String { "OpenAI — gpt-4o-transcribe" }
+    static let modelName = "gpt-4o-transcribe"
+    private static let endpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
+    private static let timeout: TimeInterval = 60
+
+    private let apiKeyProvider: () -> String?
+
+    var displayName: String { "OpenAI — \(Self.modelName)" }
+
+    /// `apiKeyProvider` is called on every transcribe so a key that gets
+    /// updated or removed mid-session is picked up without rebuilding.
+    init(apiKeyProvider: @escaping () -> String?) {
+        self.apiKeyProvider = apiKeyProvider
+    }
 
     func transcribe(audioPath: String) throws -> String {
-        throw TranscriptionError(
-            message: "OpenAI transcription is not implemented yet — coming in PR 15"
+        guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else {
+            throw TranscriptionError(message: "No OpenAI API key set. Open Murmur and add one.")
+        }
+
+        let fileURL = URL(fileURLWithPath: audioPath)
+        let audioData = try Data(contentsOf: fileURL)
+
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: Self.endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Self.timeout
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)",
+                         forHTTPHeaderField: "Content-Type")
+        request.httpBody = Self.multipartBody(
+            boundary: boundary,
+            audio: audioData,
+            filename: fileURL.lastPathComponent
         )
+
+        // Bridge the async URLSession API to synchronous.
+        var resultData: Data?
+        var resultResponse: URLResponse?
+        var resultError: Error?
+        let sem = DispatchSemaphore(value: 0)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            resultData = data
+            resultResponse = response
+            resultError = error
+            sem.signal()
+        }.resume()
+
+        sem.wait()
+
+        if let error = resultError {
+            throw TranscriptionError(message: "Network error: \(error.localizedDescription)")
+        }
+        guard let http = resultResponse as? HTTPURLResponse, let data = resultData else {
+            throw TranscriptionError(message: "Empty response from OpenAI.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw TranscriptionError(
+                message: "OpenAI \(http.statusCode): \(Self.extractErrorMessage(body: body))"
+            )
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = json["text"] as? String else {
+            throw TranscriptionError(message: "Malformed OpenAI response.")
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Helpers
+
+    private static func multipartBody(boundary: String, audio: Data, filename: String) -> Data {
+        var body = Data()
+        func appendField(name: String, value: String) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n"
+                .data(using: .utf8)!)
+            body.append(value.data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+
+        appendField(name: "model", value: modelName)
+        appendField(name: "response_format", value: "json")
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n"
+                .data(using: .utf8)!
+        )
+        body.append("Content-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
+        body.append(audio)
+        body.append("\r\n".data(using: .utf8)!)
+
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        return body
+    }
+
+    private static func extractErrorMessage(body: String) -> String {
+        guard let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let err = json["error"] as? [String: Any],
+              let msg = err["message"] as? String else {
+            return body.isEmpty ? "(no body)" : body
+        }
+        return msg
     }
 }

@@ -70,6 +70,12 @@ struct ContentView: View {
 
 private struct Sidebar: View {
     @ObservedObject var state: AppState
+    @ObservedObject var settings: SettingsStore
+
+    init(state: AppState) {
+        self.state = state
+        self.settings = state.settings
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -82,7 +88,7 @@ private struct Sidebar: View {
                     ForEach(state.localModels, id: \.id) { model in
                         ModelRow(
                             label: model.label,
-                            selected: state.currentModelID == model.id,
+                            selected: !state.useOnline && state.currentModelID == model.id,
                             enabled: true,
                             trailingNote: nil,
                             onSelect: { state.selectLocal(model.id) }
@@ -94,10 +100,10 @@ private struct Sidebar: View {
                     SectionLabel("Online")
                     ModelRow(
                         label: "OpenAI — gpt-4o-transcribe",
-                        selected: false,
-                        enabled: false,
-                        trailingNote: "Coming in v1.9.0",
-                        onSelect: {}
+                        selected: state.useOnline,
+                        enabled: settings.hasOpenAIKey,
+                        trailingNote: settings.hasOpenAIKey ? nil : "Add API key →",
+                        onSelect: { state.selectOnline() }
                     )
                 }
             }
@@ -197,6 +203,8 @@ private struct OpenAISection: View {
     @ObservedObject var settings: SettingsStore
 
     @State private var draftKey: String = ""
+    @State private var validating: Bool = false
+    @State private var saveError: String? = nil
     @State private var showSaved: Bool = false
 
     var body: some View {
@@ -205,7 +213,7 @@ private struct OpenAISection: View {
                 Text("OpenAI API Key")
                     .font(.headline)
                 if settings.hasOpenAIKey {
-                    Label("Saved", systemImage: "checkmark.circle.fill")
+                    Label("Verified", systemImage: "checkmark.circle.fill")
                         .labelStyle(.titleAndIcon)
                         .font(.caption)
                         .foregroundStyle(.green)
@@ -216,33 +224,56 @@ private struct OpenAISection: View {
                     .font(.caption)
             }
 
-            Text("Enter your key to enable the online model. Stored locally in macOS Keychain — never leaves your Mac except in direct requests to OpenAI.")
+            Text("Enter your key to enable the online model. It is validated against OpenAI before saving, then stored in macOS Keychain.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Toggle(isOn: $settings.proofreadEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Proofread after transcription")
+                        .font(.callout)
+                    Text("Fixes grammar, punctuation, and phrasing via gpt-4o-mini. Works with any model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .disabled(!settings.hasOpenAIKey)
+            .opacity(settings.hasOpenAIKey ? 1 : 0.45)
+
+            Divider()
 
             HStack(spacing: 8) {
                 SecureField(settings.hasOpenAIKey ? "•••••••••••••••••••• (key saved)" : "sk-…",
                             text: $draftKey)
                     .textFieldStyle(.roundedBorder)
                     .disableAutocorrection(true)
+                    .disabled(validating)
 
-                Button("Save") {
-                    settings.setOpenAIAPIKey(draftKey)
-                    draftKey = ""
-                    flashSaved()
-                }
-                .disabled(draftKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                if validating {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 60)
+                } else {
+                    Button("Save") { save() }
+                        .disabled(draftKey.trimmingCharacters(in: .whitespaces).isEmpty)
 
-                if settings.hasOpenAIKey {
-                    Button("Remove", role: .destructive) {
-                        settings.clearOpenAIAPIKey()
+                    if settings.hasOpenAIKey {
+                        Button("Remove", role: .destructive) {
+                            settings.clearOpenAIAPIKey()
+                            saveError = nil
+                        }
                     }
                 }
             }
 
-            if showSaved {
-                Text("Saved to Keychain.")
+            if let error = saveError {
+                Label(error, systemImage: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if showSaved {
+                Label("Saved to Keychain.", systemImage: "checkmark.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.green)
                     .transition(.opacity)
@@ -251,10 +282,20 @@ private struct OpenAISection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func flashSaved() {
-        withAnimation { showSaved = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            withAnimation { showSaved = false }
+    private func save() {
+        saveError = nil
+        validating = true
+        settings.validateAndSaveOpenAIKey(draftKey) { error in
+            validating = false
+            if let error = error {
+                saveError = error
+            } else {
+                draftKey = ""
+                withAnimation { showSaved = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    withAnimation { showSaved = false }
+                }
+            }
         }
     }
 }

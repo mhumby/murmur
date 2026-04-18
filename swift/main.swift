@@ -90,17 +90,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var appState: AppState!
     var mainWindowController: MainWindowController!
 
-    /// Build a Transcriber for the given local model ID. Kept as a factory
-    /// so PR 15 can extend this to return an OpenAITranscriber when the user
-    /// picks the online option.
-    func makeTranscriber(forLocalModel modelID: String) -> Transcriber {
+    /// Build a Transcriber for the given backend selection.
+    /// `useOnline` routes to the OpenAI gpt-4o-transcribe backend; otherwise
+    /// a LocalMLXTranscriber is built for `localModelID`.
+    func makeTranscriber(useOnline: Bool, localModelID: String) -> Transcriber {
+        if useOnline {
+            return OpenAITranscriber { [weak self] in
+                self?.appState?.settings.openAIAPIKey()
+            }
+        }
         // Extract a short label like "Tiny"/"Base"/"Small" from the menu
         // label corresponding to this model ID. Falls back to the ID.
-        let label = models.first { $0.id == modelID }
+        let label = models.first { $0.id == localModelID }
             .map { $0.label.split(separator: " ").first.map(String.init) ?? $0.label }
-            ?? modelID
+            ?? localModelID
         return LocalMLXTranscriber(
-            modelID: modelID,
+            modelID: localModelID,
             modelLabel: label,
             pythonPath: pythonPath,
             scriptPath: transcribeScript,
@@ -109,18 +114,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Build the initial transcriber for the default model.
-        transcriber = makeTranscriber(forLocalModel: currentModel)
-
-        // Build the observable state for the main window. When the user
-        // picks a model in the window, rebuild the transcriber.
+        // Build the observable state for the main window first, so the
+        // OpenAI transcriber factory can read the API key from settings.
         appState = AppState(currentModelID: currentModel, localModels: models)
-        appState.onLocalModelChange = { [weak self] modelID in
+        appState.onBackendChange = { [weak self] useOnline, modelID in
             guard let self = self else { return }
             self.currentModel = modelID
-            self.transcriber = self.makeTranscriber(forLocalModel: modelID)
-            logger.log("[INFO] Model changed to \(self.transcriber.displayName) (\(modelID))")
+            self.transcriber = self.makeTranscriber(
+                useOnline: useOnline, localModelID: modelID
+            )
+            logger.log("[INFO] Backend changed to \(self.transcriber.displayName)")
         }
+
+        // Build the initial transcriber for the default (local) model.
+        transcriber = makeTranscriber(useOnline: false, localModelID: currentModel)
         mainWindowController = MainWindowController(state: appState)
 
         // Request notification permission
@@ -292,20 +299,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             text = try backend.transcribe(audioPath: tempAudioFile)
         } catch {
-            logger.log("[ERROR] Transcription failed: \(error)")
-            DispatchQueue.main.async { self.resetUI() }
+            let message = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            logger.log("[ERROR] Transcription failed: \(message)")
+            DispatchQueue.main.async {
+                self.showNotification(
+                    title: "Murmur — Transcription failed",
+                    body: message
+                )
+                self.resetUI()
+            }
             return
         }
 
-        logger.log("[INFO] Result: \"\(text)\"")
+        logger.log("[INFO] Raw transcription: \"\(text)\"")
+
+        // Optional proofread pass via gpt-4o-mini.
+        let finalText: String
+        let settings = appState.settings
+        if settings.proofreadEnabled && settings.hasOpenAIKey {
+            do {
+                finalText = try settings.proofread(text)
+                logger.log("[INFO] Proofread result: \"\(finalText)\"")
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+                logger.log("[WARN] Proofread failed (\(message)), using raw transcription")
+                finalText = text   // fall back gracefully — don't drop the transcription
+            }
+        } else {
+            finalText = text
+        }
 
         // Persist to history (no-op for empty text; store trims & skips).
         let modelName = backend.displayName
         DispatchQueue.main.async {
-            self.appState.history.append(modelDisplayName: modelName, text: text)
+            self.appState.history.append(modelDisplayName: modelName, text: finalText)
         }
 
-        if text.isEmpty {
+        if finalText.isEmpty {
             DispatchQueue.main.async {
                 self.showNotification(title: "Murmur", body: "No speech detected")
                 self.resetUI()
@@ -316,20 +348,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Copy to clipboard
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        pasteboard.setString(finalText, forType: .string)
 
         // Simulate Cmd+V
         if AXIsProcessTrusted() {
             simulatePaste()
             logger.log("[INFO] Pasted via CGEvent")
             DispatchQueue.main.async {
-                self.showNotification(title: "Murmur", body: text)
+                self.showNotification(title: "Murmur", body: finalText)
                 self.resetUI()
             }
         } else {
             logger.log("[WARNING] No Accessibility — clipboard only")
             DispatchQueue.main.async {
-                self.showNotification(title: "Murmur — Copied", body: "\(text)\n\nPress Cmd+V to paste")
+                self.showNotification(title: "Murmur — Copied", body: "\(finalText)\n\nPress Cmd+V to paste")
                 self.resetUI()
             }
         }

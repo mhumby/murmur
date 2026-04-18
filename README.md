@@ -2,7 +2,11 @@
 
 Local voice-to-text dictation for macOS, powered by [Whisper](https://github.com/openai/whisper) running on Apple Silicon via [MLX](https://github.com/ml-explore/mlx).
 
-Press `fn`, speak, press `fn` again — your words are transcribed and pasted wherever the cursor is. No cloud, no subscription, fully offline.
+Press `fn`, speak, press `fn` again — your words are transcribed and pasted wherever the cursor is.
+
+**Works fully offline by default.** Online features (OpenAI transcription and proofread) are optional and require an API key you supply yourself.
+
+---
 
 ## Why I built this
 
@@ -10,13 +14,17 @@ I work remotely, which means everything happens through Slack, email, and text �
 
 I started using a popular AI dictation app to keep up. It worked well enough, but at £19/month it costs as much as a full AI assistant like ChatGPT or Claude. The free tier came with a 2,000 word limit, which disappeared fast. Even on the paid plan, punctuation was hit-or-miss — full stops and commas would often go missing, turning spoken sentences into one long run-on that needed heavy editing afterwards.
 
-So I built Murmur instead. It runs entirely on-device using OpenAI's Whisper model, optimised for Apple Silicon via MLX. No subscription, no word limits, no audio leaving your machine.
+So I built Murmur instead. It runs entirely on-device using OpenAI's Whisper model, optimised for Apple Silicon via MLX. No subscription, no word limits, no audio leaving your machine — unless you choose to enable the optional online features.
+
+---
 
 ## Requirements
 
 - macOS on Apple Silicon (M1/M2/M3/M4)
 - Xcode Command Line Tools (`xcode-select --install`)
 - Python 3.13+ (via Homebrew: `brew install python@3.13`)
+
+---
 
 ## Install
 
@@ -48,17 +56,19 @@ cd murmur
 On first launch, macOS will prompt for:
 - **Accessibility** — required for auto-paste (simulates Cmd+V)
 - **Microphone** — required for recording
-- **Notifications** — optional, shows transcribed text
+- **Notifications** — optional, shows transcribed text as a banner
 
 The first recording downloads the Whisper model (~150 MB for "base"). After that it works fully offline.
+
+---
 
 ## Usage
 
 | Action | How |
 |---|---|
 | **Start recording** | Press `fn` or `Option+Space` |
-| **Stop & transcribe** | Press `fn` or `Option+Space` again |
-| **Switch model** | Menu bar icon > Whisper Model |
+| **Stop and transcribe** | Press `fn` or `Option+Space` again |
+| **Open settings / history** | Menu bar icon > Open Murmur, or `Cmd+,` |
 | **Quit** | Menu bar icon > Quit Murmur |
 
 ### Menu bar icon
@@ -67,19 +77,85 @@ The first recording downloads the Whisper model (~150 MB for "base"). After that
 |---|---|
 | Microphone | Idle, ready to record |
 | Red circle | Recording — speak now |
-| Hourglass | Transcribing |
+| Hourglass | Transcribing (or proofreading) |
 
 A sound plays when recording starts (Tink) and stops (Pop).
 
-### Alternative: run from terminal
+---
 
-If you prefer running from the terminal without building the .app:
+## Main window
 
-```bash
-./run.sh
-```
+Open the main window from the menu bar or with `Cmd+,`. It has three areas:
 
-This uses the Python-based menu bar app directly. Auto-paste works if your terminal app has Accessibility permission.
+### Left sidebar — Model
+
+Pick which transcription backend to use. The selected model persists between sessions.
+
+| Option | Description |
+|---|---|
+| **Tiny** | Fastest local model. Good for short commands and quick notes. |
+| **Base** | Default. Good balance of speed and accuracy for everyday dictation. |
+| **Small** | Most accurate local model. Better for longer passages and accented speech. |
+| **OpenAI — gpt-4o-transcribe** | Online model via the OpenAI API. Requires an API key (see below). Significantly more accurate for accented speech, technical terms, and noisy environments. |
+
+### Right top — OpenAI API Key
+
+Required to use the online transcription model or the proofread feature. See [Online features](#online-features) below for setup instructions.
+
+### Right bottom — History
+
+Every successful transcription is saved here, newest first, up to 200 entries. The list persists across relaunches.
+
+| Action | How |
+|---|---|
+| **Copy a result** | Click the row |
+| **Delete a result** | Right-click > Delete |
+| **Clear all** | "Clear All" button (confirmation required) |
+
+---
+
+## Online features
+
+All online features are **opt-in** and **disabled by default**. If you never add an API key, Murmur behaves identically to previous versions — fully offline, no data sent anywhere.
+
+When online features are active, your audio (for online transcription) or transcribed text (for proofread) is sent to the OpenAI API over HTTPS. Audio is processed according to [OpenAI's usage policy](https://openai.com/policies/api-data-usage-policies).
+
+### Setting up an OpenAI API key
+
+1. Go to [platform.openai.com/api-keys](https://platform.openai.com/api-keys) and create a new key.
+2. Open Murmur (`Cmd+,`) and paste the key into the **OpenAI API Key** field.
+3. Click **Save**. Murmur validates the key against the OpenAI API before storing it.
+4. The key is saved in **macOS Keychain** under the service `com.mhumby.murmur`. It is never written to disk in plaintext, never logged, and never shared.
+
+Once saved, the **OpenAI — gpt-4o-transcribe** model becomes available in the sidebar, and the **Proofread** toggle is unlocked.
+
+To remove the key, click **Remove** in the same section. This deletes it from Keychain immediately.
+
+### Online transcription (gpt-4o-transcribe)
+
+Select **OpenAI — gpt-4o-transcribe** in the model sidebar. Your recorded audio is uploaded to `POST /v1/audio/transcriptions` with the `gpt-4o-transcribe` model.
+
+Compared to local Whisper models:
+
+| | Local Whisper | gpt-4o-transcribe |
+|---|---|---|
+| **Cost** | Free | ~$0.006/min |
+| **Privacy** | Audio stays on device | Audio sent to OpenAI |
+| **Speed** | Instant (on-device) | Adds ~1-3s network round-trip |
+| **Accuracy** | Good for clear speech | Significantly better for accents, noisy environments, and technical vocabulary |
+| **Punctuation** | Variable by model size | Consistent, natural punctuation |
+
+### Proofread
+
+The **Proofread after transcription** toggle (in the OpenAI section) adds a second pass through `gpt-4o-mini` after any transcription — local or online. It fixes grammar, punctuation, capitalisation, and phrasing, and removes filler words (um, uh, like, you know).
+
+The factual content of what you said is never changed — only how it is expressed.
+
+Cost is negligible: a typical 30-second dictation produces around 100 words, which costs well under $0.001 for the proofread pass.
+
+If the proofread call fails for any reason (network error, rate limit), Murmur falls back silently to the raw transcription so nothing is lost.
+
+---
 
 ## macOS setup
 
@@ -100,104 +176,83 @@ If text doesn't auto-paste after transcription:
 4. Make sure the toggle is **on**
 5. Quit and relaunch Murmur
 
+---
+
 ## Models
 
-Switch models from the menu bar:
+Local models are downloaded on first use from [Hugging Face](https://huggingface.co/mlx-community) and cached at `~/.cache/huggingface/hub/`.
 
 | Model | Download size | Speed | Best for |
 |---|---|---|---|
 | **Tiny** | ~75 MB | Fastest | Quick notes, short commands |
 | **Base** | ~150 MB | Fast | General dictation (default) |
 | **Small** | ~500 MB | Moderate | Longer passages, accented speech |
+| **gpt-4o-transcribe** | — (cloud) | Fast + network | High-accuracy dictation, noisy environments |
 
-Models are downloaded once from [Hugging Face](https://huggingface.co/mlx-community) and cached at `~/.cache/huggingface/hub/`.
+---
 
 ## Architecture
 
-Murmur is a **native Swift menu bar app** that calls Python only for ML inference:
+Murmur is a **native Swift menu bar app** that calls Python only for local ML inference:
 
 ```
-┌─────────────────────────────┐
-│    Murmur.app (Swift)       │
-│  - Menu bar + hotkey        │
-│  - Accessibility (CGEvent)  │
-│  - Clipboard + Cmd+V paste  │
-└──────────┬──────────────────┘
-           │ subprocess
-     ┌─────▼─────┐      ┌──────────────┐
-     │ record_cli │      │transcribe_cli│
-     │  (Python)  │      │   (Python)   │
-     │ sounddevice│      │  mlx-whisper │
-     └────────────┘      └──────────────┘
+┌────────────────────────────────────────┐
+│           Murmur.app (Swift)           │
+│  - Menu bar + hotkeys (fn, Option+Spc) │
+│  - Main window (SwiftUI)               │
+│  - Accessibility paste (CGEvent)       │
+│  - History (JSON), Settings (Keychain) │
+└──────┬─────────────────────┬───────────┘
+       │ subprocess          │ URLSession (HTTPS)
+ ┌─────▼──────┐   ┌──────────▼──────────────────┐
+ │ record_cli │   │       OpenAI API             │
+ │  (Python)  │   │  /v1/audio/transcriptions    │
+ │sounddevice │   │  /v1/chat/completions        │
+ └─────┬──────┘   └─────────────────────────────┘
+       │ WAV file
+ ┌─────▼──────────────────┐
+ │    transcribe_cli.py   │  (local path only)
+ │       mlx-whisper      │
+ └────────────────────────┘
 ```
 
 1. **Hotkey** — Swift registers `fn` and `Option+Space` via `NSEvent` global monitor
 2. **Recording** — Python subprocess captures audio at 16 kHz, saves to WAV
 3. **Silence trimming** — trailing silence is stripped to prevent Whisper hallucinations
-4. **Transcription** — Python subprocess runs Whisper via `mlx-whisper`, prints text to stdout
-5. **Paste** — Swift reads the text, copies to clipboard, simulates `Cmd+V` via `CGEvent`
+4. **Transcription** — either local (`mlx-whisper` via Python subprocess) or online (`gpt-4o-transcribe` via URLSession)
+5. **Proofread** — optional second pass through `gpt-4o-mini` via URLSession
+6. **Paste** — Swift copies final text to clipboard and simulates `Cmd+V` via `CGEvent`
 
-All processing happens locally on-device.
-
-## Building the Swift app
-
-The Swift app lives in `swift/` and is split across a small number of files (entry point + AppDelegate in `main.swift`, transcription backends in `Transcribers.swift`). To compile:
-
-```bash
-./build_app.sh
-```
-
-This runs:
-
-```bash
-swiftc -O \
-    -o Murmur.app/Contents/MacOS/Murmur \
-    swift/main.swift \
-    swift/Transcribers.swift \
-    -framework Cocoa \
-    -framework Carbon \
-    -framework ApplicationServices
-```
-
-The build script also:
-
-- Generates the `Info.plist` (version from `VERSION`, `LSUIElement` to hide from the Dock, copyright for the About dialog).
-- Bundles the Python `.venv` into `Murmur.app/Contents/Resources/venv/`, making the app self-contained (~800 MB bundle size). This means a built `Murmur.app` can be copied to another Apple Silicon Mac with Homebrew Python 3.13 installed and just work — no `git clone` or `setup.sh` required on the target machine.
-- Ad-hoc signs the binary.
-
-To install after building, use `install.sh`:
-
-```bash
-./install.sh
-```
-
-This quits any running instance, copies the new build to `/Applications/`, resets the TCC permission entries for `com.mhumby.murmur` (so macOS re-prompts cleanly instead of silently using a stale entry tied to the previous ad-hoc signature), and launches the app.
+---
 
 ## Project structure
 
 ```
 murmur/
   swift/
-    main.swift          native macOS app — menu bar, hotkey, paste
-    Transcribers.swift  transcription backends (local MLX, OpenAI stub)
-  record_cli.py         audio recording subprocess (sounddevice → WAV)
-  transcribe_cli.py     transcription subprocess (mlx-whisper)
-  app.py                Python-based menu bar app (alternative to Swift)
-  recorder.py           audio recorder module (used by app.py)
-  transcriber.py        transcriber module (used by app.py)
-  text_inserter.py      text paste module (used by app.py)
-  build_app.sh          builds Murmur.app from Swift source
-  install.sh            installs to /Applications and resets TCC permissions
-  setup.sh              Python venv and dependency install
-  run.sh                launch Python-based app from terminal
-  requirements.txt      Python dependencies
+    main.swift             app entry point, AppDelegate, recording, paste
+    Transcribers.swift     Transcriber protocol, LocalMLXTranscriber, OpenAITranscriber
+    AppState.swift         SwiftUI observable state (model selection, backend)
+    MainWindow.swift       main window layout (sidebar, OpenAI section, history)
+    HistoryStore.swift     JSON-backed transcription history
+    SettingsStore.swift    preferences and OpenAI key validation
+    KeychainHelper.swift   minimal Keychain wrapper for API key storage
+  record_cli.py            audio recording subprocess (sounddevice -> WAV)
+  transcribe_cli.py        local transcription subprocess (mlx-whisper)
+  build_app.sh             compiles Swift, bundles venv, writes Info.plist
+  install.sh               copies to /Applications, resets TCC permissions, launches
+  setup.sh                 Python venv and dependency install
+  requirements.txt         Python dependencies
+  VERSION                  single source of truth for the version number
 ```
+
+---
 
 ## Troubleshooting
 
 **Text doesn't appear after transcription**
 - Check Accessibility permission for Murmur (see above)
-- If you previously had a Python-based Murmur in Accessibility, remove it and re-add the new one
+- If you previously had a Python-based Murmur in Accessibility, remove it and re-add the native app
 
 **fn key opens emoji picker**
 - Set "Press fn key to" to "Do Nothing" in System Settings > Keyboard
@@ -210,48 +265,37 @@ murmur/
 - Murmur filters hallucination loops automatically
 - Switch to the Small model for better accuracy
 
+**OpenAI — "Invalid API key"**
+- Double-check the key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+- Make sure you have billing set up on your OpenAI account
+
+**OpenAI — transcription times out or fails**
+- Check your network connection
+- If proofread is on and fails, Murmur will paste the raw transcription rather than drop it
+
 **App shows "damaged" or won't open**
 - Run `xattr -cr /Applications/Murmur.app` to clear the quarantine flag
 
 **Logs**
 - View logs at `~/Library/Logs/Murmur.log`
 
+---
+
 ## Versioning
 
 Murmur follows [Semantic Versioning](https://semver.org): `MAJOR.MINOR.PATCH`.
 
-The version lives in a single `VERSION` file at the repo root. `build_app.sh` reads it and injects the value into `CFBundleVersion` and `CFBundleShortVersionString` in the generated `Info.plist`, so the menu bar "Murmur vX.Y.Z" entry, the startup log line, and the macOS "About" dialog all stay in sync.
-
-When to bump which component:
+The version lives in a single `VERSION` file at the repo root. `build_app.sh` reads it and injects the value into `CFBundleVersion` and `CFBundleShortVersionString` in the generated `Info.plist`, so the startup log line and the macOS About dialog stay in sync.
 
 | Component | When to bump | Example |
 |---|---|---|
-| **MAJOR** | Breaking change users must act on (e.g. new required permission, changed hotkey, incompatible config) | `1.4.0` to `2.0.0` |
-| **MINOR** | New feature, backwards compatible (e.g. new model, new hotkey option, UI addition) | `1.4.0` to `1.5.0` |
-| **PATCH** | Bug fix or internal refactor, no user-visible change | `1.4.0` to `1.4.1` |
+| **MAJOR** | Breaking change users must act on (new required permission, incompatible config) | `1.9.0` to `2.0.0` |
+| **MINOR** | New feature, backwards compatible | `1.8.0` to `1.9.0` |
+| **PATCH** | Bug fix or internal refactor, no user-visible change | `1.9.0` to `1.9.1` |
 
-Release workflow:
+Pushing a `v*.*.*` tag triggers `.github/workflows/release.yml`, which builds, packages, and publishes a GitHub Release automatically.
 
-```bash
-# 1. Bump the file (commit as part of your change PR)
-echo "1.6.1" > VERSION
-
-# 2. After the PR merges to main, tag and push
-git tag v1.6.1
-git push origin v1.6.1
-```
-
-Pushing a `v*.*.*` tag triggers `.github/workflows/release.yml`, which:
-
-1. Verifies the tag matches the `VERSION` file (hard fails otherwise).
-2. Installs Homebrew Python 3.13 on the macOS-14 runner.
-3. Runs `./setup.sh` and `./build_app.sh`.
-4. Verifies the bundled venv can import `mlx_whisper`.
-5. Packages `Murmur.app` with `ditto` (preserves symlinks and the ad-hoc signature — `zip` can corrupt macOS app bundles).
-6. Computes a SHA-256 checksum.
-7. Creates a GitHub Release with the `.zip`, the `.sha256`, and install instructions.
-
-No manual release steps needed beyond the tag push.
+---
 
 ## Contributing
 
