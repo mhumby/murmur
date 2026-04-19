@@ -4,17 +4,40 @@ import SwiftUI
 // MARK: - Entry
 
 /// A single transcription event persisted to history.
+///
+/// When proofread is enabled, `text` holds the polished version and
+/// `rawText` holds the original transcription so the user can toggle
+/// "Show Original" to verify nothing was changed semantically.
+/// `isPolishing` is a transient UI flag — it's excluded from Codable so
+/// it always starts false after a relaunch.
 struct HistoryEntry: Codable, Identifiable, Hashable {
     let id: UUID
     let timestamp: Date
     let modelDisplayName: String   // e.g. "Local — Base" or "OpenAI — gpt-4o-transcribe"
-    let text: String
+    var text: String
+    var rawText: String?           // non-nil only when proofread changed the text
 
-    init(id: UUID = UUID(), timestamp: Date = Date(), modelDisplayName: String, text: String) {
+    // Transient — not encoded/decoded, reset on load.
+    var isPolishing: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case id, timestamp, modelDisplayName, text, rawText
+    }
+
+    init(
+        id: UUID = UUID(),
+        timestamp: Date = Date(),
+        modelDisplayName: String,
+        text: String,
+        rawText: String? = nil,
+        isPolishing: Bool = false
+    ) {
         self.id = id
         self.timestamp = timestamp
         self.modelDisplayName = modelDisplayName
         self.text = text
+        self.rawText = rawText
+        self.isPolishing = isPolishing
     }
 }
 
@@ -85,18 +108,46 @@ final class HistoryStore: ObservableObject {
 
     // MARK: Mutations
 
-    /// Append a new transcription. Called from the main thread after a
-    /// successful transcription — SwiftUI observers update immediately.
-    func append(modelDisplayName: String, text: String) {
-        // Skip empty transcriptions entirely.
+    /// Append a new transcription entry. Returns the entry's ID so a
+    /// subsequent proofread pass can update it in-place via `updatePolished`.
+    /// `isPolishing` starts true when a polish pass is about to run.
+    /// Returns `nil` for empty input (nothing added).
+    @discardableResult
+    func append(modelDisplayName: String, text: String, isPolishing: Bool = false) -> UUID? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return nil }
 
-        let entry = HistoryEntry(modelDisplayName: modelDisplayName, text: trimmed)
+        let entry = HistoryEntry(
+            modelDisplayName: modelDisplayName,
+            text: trimmed,
+            isPolishing: isPolishing
+        )
         entries.insert(entry, at: 0)  // newest first
         if entries.count > maxEntries {
             entries = Array(entries.prefix(maxEntries))
         }
+        save()
+        return entry.id
+    }
+
+    /// Replace an entry's text with the proofread version and clear
+    /// `isPolishing`. `rawText` captures the pre-polish original so the
+    /// "Show Original" toggle can display it. No-op if the ID is unknown
+    /// (e.g. user cleared history mid-polish).
+    func updatePolished(id: UUID, polishedText: String, rawText: String) {
+        guard let idx = entries.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = polishedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        entries[idx].text = trimmed.isEmpty ? rawText : trimmed
+        entries[idx].rawText = (trimmed != rawText && !trimmed.isEmpty) ? rawText : nil
+        entries[idx].isPolishing = false
+        save()
+    }
+
+    /// Clear the `isPolishing` flag without changing text — used when the
+    /// proofread pass failed and the entry should stand as the raw transcription.
+    func markPolishFailed(id: UUID) {
+        guard let idx = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[idx].isPolishing = false
         save()
     }
 

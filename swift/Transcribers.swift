@@ -77,16 +77,27 @@ class LocalMLXTranscriber: Transcriber {
 class OpenAITranscriber: Transcriber {
     static let modelName = "gpt-4o-transcribe"
     private static let endpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
-    private static let timeout: TimeInterval = 60
+
+    // Fail-fast timeouts — these deliberately surface errors to the user
+    // rather than letting the status bar hang on a dead network.
+    private static let requestTimeout:  TimeInterval = 20
+    private static let resourceTimeout: TimeInterval = 25
 
     private let apiKeyProvider: () -> String?
+    private let promptProvider: () -> String?
 
     var displayName: String { "OpenAI — \(Self.modelName)" }
 
     /// `apiKeyProvider` is called on every transcribe so a key that gets
     /// updated or removed mid-session is picked up without rebuilding.
-    init(apiKeyProvider: @escaping () -> String?) {
+    /// `promptProvider` supplies the accent/context hint sent as the
+    /// OpenAI `prompt` field; return nil to omit.
+    init(
+        apiKeyProvider: @escaping () -> String?,
+        promptProvider: @escaping () -> String? = { nil }
+    ) {
         self.apiKeyProvider = apiKeyProvider
+        self.promptProvider = promptProvider
     }
 
     func transcribe(audioPath: String) throws -> String {
@@ -100,33 +111,25 @@ class OpenAITranscriber: Transcriber {
         let boundary = "Boundary-\(UUID().uuidString)"
         var request = URLRequest(url: Self.endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = Self.timeout
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)",
                          forHTTPHeaderField: "Content-Type")
         request.httpBody = Self.multipartBody(
             boundary: boundary,
             audio: audioData,
-            filename: fileURL.lastPathComponent
+            filename: fileURL.lastPathComponent,
+            prompt: promptProvider()
         )
 
-        // Bridge the async URLSession API to synchronous.
-        var resultData: Data?
-        var resultResponse: URLResponse?
-        var resultError: Error?
-        let sem = DispatchSemaphore(value: 0)
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            resultData = data
-            resultResponse = response
-            resultError = error
-            sem.signal()
-        }.resume()
-
-        sem.wait()
+        let session = OpenAINetworking.makeSession(
+            requestTimeout: Self.requestTimeout,
+            resourceTimeout: Self.resourceTimeout
+        )
+        let (resultData, resultResponse, resultError)
+            = OpenAINetworking.performSync(request, on: session)
 
         if let error = resultError {
-            throw TranscriptionError(message: "Network error: \(error.localizedDescription)")
+            throw TranscriptionError(message: OpenAINetworking.describe(error))
         }
         guard let http = resultResponse as? HTTPURLResponse, let data = resultData else {
             throw TranscriptionError(message: "Empty response from OpenAI.")
@@ -147,7 +150,12 @@ class OpenAITranscriber: Transcriber {
 
     // MARK: - Helpers
 
-    private static func multipartBody(boundary: String, audio: Data, filename: String) -> Data {
+    private static func multipartBody(
+        boundary: String,
+        audio: Data,
+        filename: String,
+        prompt: String?
+    ) -> Data {
         var body = Data()
         func appendField(name: String, value: String) {
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
@@ -159,6 +167,9 @@ class OpenAITranscriber: Transcriber {
 
         appendField(name: "model", value: modelName)
         appendField(name: "response_format", value: "json")
+        if let prompt = prompt, !prompt.isEmpty {
+            appendField(name: "prompt", value: prompt)
+        }
 
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append(

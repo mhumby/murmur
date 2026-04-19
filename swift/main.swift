@@ -95,9 +95,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// a LocalMLXTranscriber is built for `localModelID`.
     func makeTranscriber(useOnline: Bool, localModelID: String) -> Transcriber {
         if useOnline {
-            return OpenAITranscriber { [weak self] in
-                self?.appState?.settings.openAIAPIKey()
-            }
+            return OpenAITranscriber(
+                apiKeyProvider: { [weak self] in
+                    self?.appState?.settings.openAIAPIKey()
+                },
+                promptProvider: { [weak self] in
+                    self?.appState?.settings.transcriptionPrompt()
+                }
+            )
         }
         // Extract a short label like "Tiny"/"Base"/"Small" from the menu
         // label corresponding to this model ID. Falls back to the ID.
@@ -145,7 +150,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Menu bar setup
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "🎤"
+        statusItem.button?.title = TranscriptionStatus.idle.icon
 
         let menu = NSMenu()
 
@@ -217,8 +222,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func startRecording() {
         isRecording = true
-        statusItem.button?.title = "🔴"
-        toggleItem.title = "Stop Recording  (fn)"
+        setStatus(.recording)
 
         // Play start sound
         NSSound(named: "Tink")?.play()
@@ -242,8 +246,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func stopRecording() {
         isRecording = false
-        statusItem.button?.title = "⏳"
-        toggleItem.title = "Processing…"
+        // Tentative status — transcribeAndPaste refines this to .uploading
+        // or .transcribing based on backend once recorder has shut down.
+        setStatus(.transcribing)
 
         // Play stop sound
         NSSound(named: "Pop")?.play()
@@ -293,11 +298,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func transcribeAndPaste() {
         let backend = transcriber!  // snapshot so a mid-transcription model change is harmless
-        logger.log("[INFO] Transcribing via \(backend.displayName)...")
+        let useOnline = appState.useOnline
+        let settings = appState.settings
+        let willProofread = settings.proofreadEnabled && settings.hasOpenAIKey
+        let modelName = backend.displayName
 
-        let text: String
+        // Reflect the backend in the status bar so the user sees
+        // "Uploading" for online or "Transcribing" for local.
+        DispatchQueue.main.async {
+            self.setStatus(useOnline ? .uploading : .transcribing)
+        }
+        logger.log("[INFO] Transcribing via \(modelName)...")
+
+        // --- Stage 1: transcription ---
+        let rawText: String
         do {
-            text = try backend.transcribe(audioPath: tempAudioFile)
+            rawText = try backend.transcribe(audioPath: tempAudioFile)
         } catch {
             let message = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
@@ -311,33 +327,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        logger.log("[INFO] Raw transcription: \"\(rawText)\"")
 
-        logger.log("[INFO] Raw transcription: \"\(text)\"")
-
-        // Optional proofread pass via gpt-4o-mini.
-        let finalText: String
-        let settings = appState.settings
-        if settings.proofreadEnabled && settings.hasOpenAIKey {
-            do {
-                finalText = try settings.proofread(text)
-                logger.log("[INFO] Proofread result: \"\(finalText)\"")
-            } catch {
-                let message = (error as? LocalizedError)?.errorDescription
-                    ?? error.localizedDescription
-                logger.log("[WARN] Proofread failed (\(message)), using raw transcription")
-                finalText = text   // fall back gracefully — don't drop the transcription
-            }
-        } else {
-            finalText = text
-        }
-
-        // Persist to history (no-op for empty text; store trims & skips).
-        let modelName = backend.displayName
-        DispatchQueue.main.async {
-            self.appState.history.append(modelDisplayName: modelName, text: finalText)
-        }
-
-        if finalText.isEmpty {
+        if rawText.isEmpty {
             DispatchQueue.main.async {
                 self.showNotification(title: "Murmur", body: "No speech detected")
                 self.resetUI()
@@ -345,12 +337,59 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Copy to clipboard
+        // --- Stage 2: save raw to history immediately (lazy update) ---
+        // History is populated up-front so the user sees the result the
+        // moment transcription finishes, even if proofread runs for another
+        // second or two. If proofread produces different text, we update in
+        // place; if it fails, the raw entry stands.
+        var entryID: UUID?
+        DispatchQueue.main.sync {
+            entryID = self.appState.history.append(
+                modelDisplayName: modelName,
+                text: rawText,
+                isPolishing: willProofread
+            )
+        }
+
+        // --- Stage 3: optional proofread pass ---
+        let finalText: String
+        if willProofread {
+            DispatchQueue.main.async { self.setStatus(.polishing) }
+            do {
+                let polished = try settings.proofread(rawText)
+                logger.log("[INFO] Proofread result: \"\(polished)\"")
+                finalText = polished
+                if let id = entryID {
+                    DispatchQueue.main.async {
+                        self.appState.history.updatePolished(
+                            id: id, polishedText: polished, rawText: rawText
+                        )
+                    }
+                }
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+                logger.log("[WARN] Proofread failed (\(message)), using raw transcription")
+                finalText = rawText
+                if let id = entryID {
+                    DispatchQueue.main.async {
+                        self.appState.history.markPolishFailed(id: id)
+                        self.showNotification(
+                            title: "Murmur — Proofread failed",
+                            body: "Pasting raw transcription. (\(message))"
+                        )
+                    }
+                }
+            }
+        } else {
+            finalText = rawText
+        }
+
+        // --- Stage 4: paste ---
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(finalText, forType: .string)
 
-        // Simulate Cmd+V
         if AXIsProcessTrusted() {
             simulatePaste()
             logger.log("[INFO] Pasted via CGEvent")
@@ -361,7 +400,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             logger.log("[WARNING] No Accessibility — clipboard only")
             DispatchQueue.main.async {
-                self.showNotification(title: "Murmur — Copied", body: "\(finalText)\n\nPress Cmd+V to paste")
+                self.showNotification(
+                    title: "Murmur — Copied",
+                    body: "\(finalText)\n\nPress Cmd+V to paste"
+                )
                 self.resetUI()
             }
         }
@@ -388,8 +430,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func resetUI() {
         isRecording = false
         audioProcess = nil
-        statusItem.button?.title = "🎤"
-        toggleItem.title = "Start Recording  (fn)"
+        setStatus(.idle)
+    }
+
+    /// Single source of truth for menu-bar UI and observable state.
+    /// Must be called on the main thread.
+    func setStatus(_ status: TranscriptionStatus) {
+        statusItem.button?.title = status.icon
+        toggleItem.title = status.toggleLabel
+        appState?.status = status
     }
 
     // MARK: - About
@@ -399,17 +448,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let copyright = bundle.infoDictionary?["NSHumanReadableCopyright"] as? String
             ?? "© 2026 2M Tech"
 
-        // Credits: MIT license notice, shown in the scrollable area of the About panel.
+        // Credits: proprietary notice, shown in the scrollable area of the About panel.
         let credits = """
-        Murmur — local voice-to-text dictation for macOS.
+        Murmur Pro — local voice-to-text dictation for macOS.
 
-        Licensed under the MIT License.
+        Proprietary software. All rights reserved.
 
-        Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+        This software and its source code are the confidential and proprietary property of 2M Tech. Unauthorized copying, distribution, modification, or use is strictly prohibited.
 
-        The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+        For licensing enquiries: mtalukder@mtalukder.net
         """
 
         let creditsAttr = NSAttributedString(

@@ -58,6 +58,7 @@ swiftc -O \
     swift/HistoryStore.swift \
     swift/KeychainHelper.swift \
     swift/SettingsStore.swift \
+    swift/OpenAINetworking.swift \
     -framework Cocoa \
     -framework Carbon \
     -framework ApplicationServices \

@@ -1,5 +1,38 @@
 import SwiftUI
 
+/// Multi-stage status shown in the menu bar + derived UI state. The
+/// AppDelegate drives transitions through `setStatus(_:)`; views read it
+/// from `AppState.status` via `@Published`.
+enum TranscriptionStatus: Equatable {
+    case idle
+    case recording
+    case uploading      // online transcription in-flight
+    case transcribing   // local transcription in-flight
+    case polishing      // proofread pass in-flight
+
+    /// Status-bar glyph.
+    var icon: String {
+        switch self {
+        case .idle: return "🎤"
+        case .recording: return "🔴"
+        case .uploading: return "☁️"
+        case .transcribing: return "⏳"
+        case .polishing: return "✨"
+        }
+    }
+
+    /// Toggle menu item label.
+    var toggleLabel: String {
+        switch self {
+        case .idle: return "Start Recording  (fn)"
+        case .recording: return "Stop Recording  (fn)"
+        case .uploading: return "Uploading…"
+        case .transcribing: return "Transcribing…"
+        case .polishing: return "Polishing…"
+        }
+    }
+}
+
 /// Observable state for the main window's SwiftUI view hierarchy.
 /// AppDelegate owns the canonical transcriber and wires the
 /// `onBackendChange` callback so UI-driven selection rebuilds it.
@@ -12,6 +45,10 @@ class AppState: ObservableObject {
     /// `true` when the user has picked the online (OpenAI) backend.
     /// When false, the active backend is the local model at `currentModelID`.
     @Published var useOnline: Bool = false
+
+    /// Current stage of the record/transcribe/polish pipeline. Driven by
+    /// AppDelegate via `setStatus(_:)` — do not mutate from views.
+    @Published var status: TranscriptionStatus = .idle
 
     /// All local Whisper models the user can choose from.
     let localModels: [(label: String, id: String)]

@@ -241,6 +241,23 @@ private struct OpenAISection: View {
             .disabled(!settings.hasOpenAIKey)
             .opacity(settings.hasOpenAIKey ? 1 : 0.45)
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Speaker context (optional)")
+                    .font(.callout)
+                Text("Helps the model pick the right words for your domain. Used by both online transcription and proofread.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField(
+                    "e.g. I am a software engineer talking about Swift, DevOps, and GitHub.",
+                    text: $settings.speakerContext,
+                    axis: .vertical
+                )
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...3)
+                .disabled(!settings.hasOpenAIKey)
+                .opacity(settings.hasOpenAIKey ? 1 : 0.45)
+            }
+
             Divider()
 
             HStack(spacing: 8) {
@@ -378,6 +395,7 @@ private struct HistoryRow: View {
 
     @State private var hovered = false
     @State private var justCopied = false
+    @State private var showingRaw = false
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -385,6 +403,13 @@ private struct HistoryRow: View {
         f.timeStyle = .short
         return f
     }()
+
+    /// What's actually displayed in the row — toggles between polished
+    /// and the pre-polish raw transcription when "Show Original" is on.
+    private var displayedText: String {
+        if showingRaw, let raw = entry.rawText { return raw }
+        return entry.text
+    }
 
     var body: some View {
         Button(action: copy) {
@@ -398,6 +423,24 @@ private struct HistoryRow: View {
                     Text(entry.modelDisplayName)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+
+                    if entry.isPolishing {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .padding(.leading, 2)
+                        Text("Polishing…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if entry.rawText != nil {
+                        Text(showingRaw ? "Original" : "Proofread")
+                            .font(.caption2)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor.opacity(0.15))
+                            .foregroundStyle(Color.accentColor)
+                            .clipShape(Capsule())
+                    }
+
                     Spacer()
                     if justCopied {
                         Text("Copied")
@@ -409,9 +452,9 @@ private struct HistoryRow: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                Text(entry.text)
+                Text(displayedText)
                     .font(.callout)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(entry.isPolishing ? .secondary : .primary)
                     .lineLimit(3)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -426,6 +469,11 @@ private struct HistoryRow: View {
         .onHover { hovered = $0 }
         .contextMenu {
             Button("Copy") { copy() }
+            if entry.rawText != nil {
+                Button(showingRaw ? "Show Proofread" : "Show Original") {
+                    showingRaw.toggle()
+                }
+            }
             Button("Delete", role: .destructive) { onDelete() }
         }
     }
@@ -433,7 +481,7 @@ private struct HistoryRow: View {
     private func copy() {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(entry.text, forType: .string)
+        pb.setString(displayedText, forType: .string)
         justCopied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             justCopied = false
