@@ -151,6 +151,33 @@ final class HistoryStore: ObservableObject {
         save()
     }
 
+    /// Result of a user-initiated edit, returned so the caller can feed the
+    /// before/after pair into VocabularyStore for learning.
+    struct EditResult {
+        let previousText: String
+        let newText: String
+    }
+
+    /// Update an entry's displayed text after the user manually edits it in
+    /// the history panel. Returns the before/after strings so the caller can
+    /// diff them into vocabulary pairs. Returns nil if the ID is unknown or
+    /// the edit is a no-op.
+    ///
+    /// Editing always targets the visible `text`: the pre-edit `rawText` (if
+    /// any) is preserved untouched so the user can still toggle "Show Original"
+    /// against the untouched transcription.
+    @discardableResult
+    func edit(id: UUID, newText: String) -> EditResult? {
+        guard let idx = entries.firstIndex(where: { $0.id == id }) else { return nil }
+        let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let previous = entries[idx].text
+        guard trimmed != previous else { return nil }
+        entries[idx].text = trimmed
+        save()
+        return EditResult(previousText: previous, newText: trimmed)
+    }
+
     func delete(_ id: UUID) {
         entries.removeAll { $0.id == id }
         save()

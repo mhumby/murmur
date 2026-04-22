@@ -57,7 +57,10 @@ struct ContentView: View {
 
                 Divider()
 
-                HistorySection(history: state.history)
+                HistorySection(
+                    history: state.history,
+                    vocabulary: state.vocabulary
+                )
                     .padding(20)
             }
             .frame(minWidth: 480)
@@ -71,10 +74,12 @@ struct ContentView: View {
 private struct Sidebar: View {
     @ObservedObject var state: AppState
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var vocabulary: VocabularyStore
 
     init(state: AppState) {
         self.state = state
         self.settings = state.settings
+        self.vocabulary = state.vocabulary
     }
 
     var body: some View {
@@ -108,6 +113,11 @@ private struct Sidebar: View {
                 }
             }
             .padding(20)
+
+            Divider()
+
+            VocabularySection(vocabulary: vocabulary)
+                .padding(20)
 
             Spacer()
 
@@ -321,6 +331,7 @@ private struct OpenAISection: View {
 
 private struct HistorySection: View {
     @ObservedObject var history: HistoryStore
+    @ObservedObject var vocabulary: VocabularyStore
     @State private var showClearConfirm = false
 
     var body: some View {
@@ -346,7 +357,18 @@ private struct HistorySection: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(history.entries.enumerated()), id: \.element.id) { index, entry in
-                            HistoryRow(entry: entry, onDelete: { history.delete(entry.id) })
+                            HistoryRow(
+                                entry: entry,
+                                onDelete: { history.delete(entry.id) },
+                                onSaveEdit: { newText in
+                                    if let result = history.edit(id: entry.id, newText: newText) {
+                                        vocabulary.learn(
+                                            original: result.previousText,
+                                            edited: result.newText
+                                        )
+                                    }
+                                }
+                            )
                             if index < history.entries.count - 1 {
                                 Divider()
                             }
@@ -392,10 +414,14 @@ private struct HistorySection: View {
 private struct HistoryRow: View {
     let entry: HistoryEntry
     let onDelete: () -> Void
+    let onSaveEdit: (String) -> Void
 
     @State private var hovered = false
     @State private var justCopied = false
     @State private var showingRaw = false
+    @State private var editing = false
+    @State private var draft = ""
+    @FocusState private var editorFocused: Bool
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -412,63 +438,17 @@ private struct HistoryRow: View {
     }
 
     var body: some View {
-        Button(action: copy) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(Self.timeFormatter.string(from: entry.timestamp))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("·")
-                        .foregroundStyle(.tertiary)
-                    Text(entry.modelDisplayName)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-
-                    if entry.isPolishing {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .padding(.leading, 2)
-                        Text("Polishing…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else if entry.rawText != nil {
-                        Text(showingRaw ? "Original" : "Proofread")
-                            .font(.caption2)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Color.accentColor.opacity(0.15))
-                            .foregroundStyle(Color.accentColor)
-                            .clipShape(Capsule())
-                    }
-
-                    Spacer()
-                    if justCopied {
-                        Text("Copied")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    } else if hovered {
-                        Image(systemName: "doc.on.doc")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Text(displayedText)
-                    .font(.callout)
-                    .foregroundStyle(entry.isPolishing ? .secondary : .primary)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+        Group {
+            if editing {
+                editorBody
+            } else {
+                displayBody
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-            .background(hovered ? Color.accentColor.opacity(0.08) : Color.clear)
         }
-        .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .contextMenu {
             Button("Copy") { copy() }
+            Button("Edit") { beginEdit() }
             if entry.rawText != nil {
                 Button(showingRaw ? "Show Proofread" : "Show Original") {
                     showingRaw.toggle()
@@ -476,6 +456,157 @@ private struct HistoryRow: View {
             }
             Button("Delete", role: .destructive) { onDelete() }
         }
+    }
+
+    // Click-to-copy surface. Hover reveals a pencil (edit) icon alongside
+    // the copy glyph — the pencil is outside the Button so its click
+    // doesn't trigger a copy.
+    private var displayBody: some View {
+        ZStack(alignment: .topTrailing) {
+            Button(action: copy) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(Self.timeFormatter.string(from: entry.timestamp))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                        Text(entry.modelDisplayName)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+
+                        if entry.isPolishing {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .padding(.leading, 2)
+                            Text("Polishing…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if entry.rawText != nil {
+                            Text(showingRaw ? "Original" : "Proofread")
+                                .font(.caption2)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.15))
+                                .foregroundStyle(Color.accentColor)
+                                .clipShape(Capsule())
+                        }
+
+                        Spacer()
+                        // Reserve space for the pencil + copy icons on the
+                        // right so text never sits under them.
+                        Color.clear.frame(width: 56, height: 1)
+                    }
+                    Text(displayedText)
+                        .font(.callout)
+                        .foregroundStyle(entry.isPolishing ? .secondary : .primary)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+                .background(hovered ? Color.accentColor.opacity(0.08) : Color.clear)
+            }
+            .buttonStyle(.plain)
+
+            // Hover-revealed actions. Kept outside the copy Button so clicking
+            // the pencil doesn't also copy. "Polishing" state suppresses edit
+            // because the text will change out from under the user.
+            HStack(spacing: 6) {
+                if justCopied {
+                    Text("Copied")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                } else if hovered {
+                    if !entry.isPolishing {
+                        Button(action: beginEdit) {
+                            Image(systemName: "pencil")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Edit transcription")
+                    }
+                    Image(systemName: "doc.on.doc")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+        }
+    }
+
+    // Inline editor. Save on ⌘↩ / Save button; Cancel or ⎋ discards.
+    // On save, the delta flows into VocabularyStore so the correction is
+    // remembered for future prompts.
+    private var editorBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(Self.timeFormatter.string(from: entry.timestamp))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("Editing")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Spacer()
+            }
+            TextEditor(text: $draft)
+                .font(.callout)
+                .frame(minHeight: 60)
+                .focused($editorFocused)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.accentColor.opacity(0.5), lineWidth: 1)
+                )
+            HStack {
+                Text("Edits are saved and used to improve future transcriptions.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { cancelEdit() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { commitEdit() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(
+                        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.06))
+        .onAppear { editorFocused = true }
+    }
+
+    // MARK: - Actions
+
+    private func beginEdit() {
+        draft = displayedText
+        editing = true
+    }
+
+    private func cancelEdit() {
+        editing = false
+        draft = ""
+    }
+
+    private func commitEdit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            onSaveEdit(trimmed)
+        }
+        editing = false
+        draft = ""
     }
 
     private func copy() {
@@ -486,5 +617,110 @@ private struct HistoryRow: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             justCopied = false
         }
+    }
+}
+
+// MARK: - Custom Vocabulary (sidebar)
+
+/// Surfaces pairs Murmur has learned from history edits. Collapsed by default
+/// so it doesn't dominate the sidebar when empty; expands to a compact list
+/// with counts and a clear action.
+private struct VocabularySection: View {
+    @ObservedObject var vocabulary: VocabularyStore
+    @State private var expanded = false
+    @State private var showClearConfirm = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DisclosureGroup(isExpanded: $expanded) {
+                content
+                    .padding(.top, 6)
+            } label: {
+                HStack(spacing: 6) {
+                    SectionLabel("Custom Vocabulary")
+                    Text("(\(vocabulary.pairs.count))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if vocabulary.pairs.isEmpty {
+            Text("Edit any history entry to teach Murmur a correction. Learned pairs are added to future transcription prompts automatically.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(vocabulary.topPairs(limit: 50)) { pair in
+                            VocabularyRow(pair: pair) {
+                                vocabulary.delete(pair.id)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 140)
+
+                Button("Clear Vocabulary") { showClearConfirm = true }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            }
+            .confirmationDialog(
+                "Clear all learned vocabulary?",
+                isPresented: $showClearConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Clear", role: .destructive) { vocabulary.clearAll() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Murmur will stop applying these corrections until it relearns them from future edits.")
+            }
+        }
+    }
+}
+
+private struct VocabularyRow: View {
+    let pair: VocabularyPair
+    let onDelete: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(pair.heard)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Image(systemName: "arrow.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(pair.corrected)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if hovered {
+                Button(action: onDelete) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Forget this pair")
+            } else if pair.count > 1 {
+                Text("×\(pair.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
     }
 }

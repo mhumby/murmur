@@ -59,6 +59,7 @@ swiftc -O \
     swift/KeychainHelper.swift \
     swift/SettingsStore.swift \
     swift/OpenAINetworking.swift \
+    swift/VocabularyStore.swift \
     -framework Cocoa \
     -framework Carbon \
     -framework ApplicationServices \
@@ -87,7 +88,7 @@ cat > "$CONTENTS/Info.plist" << PLIST
     <key>NSMicrophoneUsageDescription</key>
     <string>Murmur needs microphone access to record your voice for transcription.</string>
     <key>NSHumanReadableCopyright</key>
-    <string>© 2026 2M Tech. Released under the MIT License.</string>
+    <string>© 2026 2M Tech. All rights reserved.</string>
     <key>MurmurVenvPath</key>
     <string>$VENV_PATH</string>
 </dict>

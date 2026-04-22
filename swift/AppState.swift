@@ -60,6 +60,10 @@ class AppState: ObservableObject {
     /// API keys and user preferences (Keychain-backed).
     let settings: SettingsStore
 
+    /// Learned `{heard -> corrected}` pairs from manual history edits.
+    /// Injected into transcription and proofread prompts via SettingsStore.
+    let vocabulary: VocabularyStore
+
     /// Fires whenever the active backend changes — either the local model ID
     /// or a flip between local and online. AppDelegate uses this to rebuild
     /// the `Transcriber`.
@@ -69,12 +73,21 @@ class AppState: ObservableObject {
         currentModelID: String,
         localModels: [(label: String, id: String)],
         history: HistoryStore = HistoryStore(),
-        settings: SettingsStore = SettingsStore()
+        settings: SettingsStore = SettingsStore(),
+        vocabulary: VocabularyStore = VocabularyStore()
     ) {
         self.currentModelID = currentModelID
         self.localModels = localModels
         self.history = history
         self.settings = settings
+        self.vocabulary = vocabulary
+
+        // Wire vocabulary into prompts. Weak capture to avoid a retain cycle
+        // — SettingsStore outlives neither AppState nor VocabularyStore here.
+        settings.vocabularyProvider = { [weak vocabulary] in
+            guard let vocabulary = vocabulary else { return [] }
+            return vocabulary.topPairs().map { (heard: $0.heard, corrected: $0.corrected) }
+        }
     }
 
     /// Entry point for UI to select a local model. Also flips `useOnline` off.
