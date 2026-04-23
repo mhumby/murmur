@@ -51,10 +51,19 @@ find "$RESOURCES/venv" -type f -name "*.pyc" -delete 2>/dev/null || true
 echo "Compiling Swift..."
 swiftc -O \
     -o "$MACOS/Murmur" \
-    swift/Murmur.swift \
+    swift/main.swift \
+    swift/Transcribers.swift \
+    swift/AppState.swift \
+    swift/MainWindow.swift \
+    swift/HistoryStore.swift \
+    swift/KeychainHelper.swift \
+    swift/SettingsStore.swift \
+    swift/OpenAINetworking.swift \
+    swift/VocabularyStore.swift \
     -framework Cocoa \
     -framework Carbon \
-    -framework ApplicationServices
+    -framework ApplicationServices \
+    -framework SwiftUI
 
 # --- Info.plist (MurmurVenvPath written at build time) ---
 cat > "$CONTENTS/Info.plist" << PLIST

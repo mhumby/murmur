@@ -80,7 +80,61 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ("Small (accurate)", "mlx-community/whisper-small-mlx"),
     ]
 
+    // Active transcription backend — rebuilt whenever the user changes model.
+    // Currently always a LocalMLXTranscriber; OpenAITranscriber joins the
+    // roster in PR 15.
+    var transcriber: Transcriber!
+
+    // Main window's observable state + controller. The window is created
+    // lazily the first time the user opens it.
+    var appState: AppState!
+    var mainWindowController: MainWindowController!
+
+    /// Build a Transcriber for the given backend selection.
+    /// `useOnline` routes to the OpenAI gpt-4o-transcribe backend; otherwise
+    /// a LocalMLXTranscriber is built for `localModelID`.
+    func makeTranscriber(useOnline: Bool, localModelID: String) -> Transcriber {
+        if useOnline {
+            return OpenAITranscriber(
+                apiKeyProvider: { [weak self] in
+                    self?.appState?.settings.openAIAPIKey()
+                },
+                promptProvider: { [weak self] in
+                    self?.appState?.settings.transcriptionPrompt()
+                }
+            )
+        }
+        // Extract a short label like "Tiny"/"Base"/"Small" from the menu
+        // label corresponding to this model ID. Falls back to the ID.
+        let label = models.first { $0.id == localModelID }
+            .map { $0.label.split(separator: " ").first.map(String.init) ?? $0.label }
+            ?? localModelID
+        return LocalMLXTranscriber(
+            modelID: localModelID,
+            modelLabel: label,
+            pythonPath: pythonPath,
+            scriptPath: transcribeScript,
+            workingDir: resourcePath
+        )
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Build the observable state for the main window first, so the
+        // OpenAI transcriber factory can read the API key from settings.
+        appState = AppState(currentModelID: currentModel, localModels: models)
+        appState.onBackendChange = { [weak self] useOnline, modelID in
+            guard let self = self else { return }
+            self.currentModel = modelID
+            self.transcriber = self.makeTranscriber(
+                useOnline: useOnline, localModelID: modelID
+            )
+            logger.log("[INFO] Backend changed to \(self.transcriber.displayName)")
+        }
+
+        // Build the initial transcriber for the default (local) model.
+        transcriber = makeTranscriber(useOnline: false, localModelID: currentModel)
+        mainWindowController = MainWindowController(state: appState)
+
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
@@ -96,7 +150,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Menu bar setup
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "🎤"
+        statusItem.button?.title = TranscriptionStatus.idle.icon
 
         let menu = NSMenu()
 
@@ -106,17 +160,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let modelMenu = NSMenu()
-        for (i, model) in models.enumerated() {
-            let item = NSMenuItem(title: model.label, action: #selector(selectModel(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = i
-            item.state = model.id == currentModel ? .on : .off
-            modelMenu.addItem(item)
-        }
-        let modelItem = NSMenuItem(title: "Whisper Model", action: nil, keyEquivalent: "")
-        modelItem.submenu = modelMenu
-        menu.addItem(modelItem)
+        // Model selection and history now live in the main window.
+        let openWindowItem = NSMenuItem(
+            title: "Open Murmur…",
+            action: #selector(openMainWindow),
+            keyEquivalent: ","
+        )
+        openWindowItem.target = self
+        menu.addItem(openWindowItem)
 
         menu.addItem(.separator())
 
@@ -171,8 +222,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func startRecording() {
         isRecording = true
-        statusItem.button?.title = "🔴"
-        toggleItem.title = "Stop Recording  (fn)"
+        setStatus(.recording)
 
         // Play start sound
         NSSound(named: "Tink")?.play()
@@ -196,8 +246,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func stopRecording() {
         isRecording = false
-        statusItem.button?.title = "⏳"
-        toggleItem.title = "Processing…"
+        // Tentative status — transcribeAndPaste refines this to .uploading
+        // or .transcribing based on backend once recorder has shut down.
+        setStatus(.transcribing)
 
         // Play stop sound
         NSSound(named: "Pop")?.play()
@@ -246,31 +297,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func transcribeAndPaste() {
-        logger.log("[INFO] Transcribing...")
+        let backend = transcriber!  // snapshot so a mid-transcription model change is harmless
+        let useOnline = appState.useOnline
+        let settings = appState.settings
+        let willProofread = settings.proofreadEnabled && settings.hasOpenAIKey
+        let modelName = backend.displayName
 
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: pythonPath)
-        process.arguments = [transcribeScript, tempAudioFile, currentModel]
-        process.currentDirectoryURL = URL(fileURLWithPath: resourcePath)
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+        // Reflect the backend in the status bar so the user sees
+        // "Uploading" for online or "Transcribing" for local.
+        DispatchQueue.main.async {
+            self.setStatus(useOnline ? .uploading : .transcribing)
+        }
+        logger.log("[INFO] Transcribing via \(modelName)...")
 
+        // --- Stage 1: transcription ---
+        let rawText: String
         do {
-            try process.run()
-            process.waitUntilExit()
+            rawText = try backend.transcribe(audioPath: tempAudioFile)
         } catch {
-            logger.log("[ERROR] Transcription failed: \(error)")
-            DispatchQueue.main.async { self.resetUI() }
+            let message = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            logger.log("[ERROR] Transcription failed: \(message)")
+            DispatchQueue.main.async {
+                self.showNotification(
+                    title: "Murmur — Transcription failed",
+                    body: message
+                )
+                self.resetUI()
+            }
             return
         }
+        logger.log("[INFO] Raw transcription: \"\(rawText)\"")
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        logger.log("[INFO] Result: \"\(text)\"")
-
-        if text.isEmpty {
+        if rawText.isEmpty {
             DispatchQueue.main.async {
                 self.showNotification(title: "Murmur", body: "No speech detected")
                 self.resetUI()
@@ -278,23 +337,73 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Copy to clipboard
+        // --- Stage 2: save raw to history immediately (lazy update) ---
+        // History is populated up-front so the user sees the result the
+        // moment transcription finishes, even if proofread runs for another
+        // second or two. If proofread produces different text, we update in
+        // place; if it fails, the raw entry stands.
+        var entryID: UUID?
+        DispatchQueue.main.sync {
+            entryID = self.appState.history.append(
+                modelDisplayName: modelName,
+                text: rawText,
+                isPolishing: willProofread
+            )
+        }
+
+        // --- Stage 3: optional proofread pass ---
+        let finalText: String
+        if willProofread {
+            DispatchQueue.main.async { self.setStatus(.polishing) }
+            do {
+                let polished = try settings.proofread(rawText)
+                logger.log("[INFO] Proofread result: \"\(polished)\"")
+                finalText = polished
+                if let id = entryID {
+                    DispatchQueue.main.async {
+                        self.appState.history.updatePolished(
+                            id: id, polishedText: polished, rawText: rawText
+                        )
+                    }
+                }
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+                logger.log("[WARN] Proofread failed (\(message)), using raw transcription")
+                finalText = rawText
+                if let id = entryID {
+                    DispatchQueue.main.async {
+                        self.appState.history.markPolishFailed(id: id)
+                        self.showNotification(
+                            title: "Murmur — Proofread failed",
+                            body: "Pasting raw transcription. (\(message))"
+                        )
+                    }
+                }
+            }
+        } else {
+            finalText = rawText
+        }
+
+        // --- Stage 4: paste ---
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        pasteboard.setString(finalText, forType: .string)
 
-        // Simulate Cmd+V
         if AXIsProcessTrusted() {
             simulatePaste()
             logger.log("[INFO] Pasted via CGEvent")
             DispatchQueue.main.async {
-                self.showNotification(title: "Murmur", body: text)
+                self.showNotification(title: "Murmur", body: finalText)
                 self.resetUI()
             }
         } else {
             logger.log("[WARNING] No Accessibility — clipboard only")
             DispatchQueue.main.async {
-                self.showNotification(title: "Murmur — Copied", body: "\(text)\n\nPress Cmd+V to paste")
+                self.showNotification(
+                    title: "Murmur — Copied",
+                    body: "\(finalText)\n\nPress Cmd+V to paste"
+                )
                 self.resetUI()
             }
         }
@@ -321,8 +430,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func resetUI() {
         isRecording = false
         audioProcess = nil
-        statusItem.button?.title = "🎤"
-        toggleItem.title = "Start Recording  (fn)"
+        setStatus(.idle)
+    }
+
+    /// Single source of truth for menu-bar UI and observable state.
+    /// Must be called on the main thread.
+    func setStatus(_ status: TranscriptionStatus) {
+        statusItem.button?.title = status.icon
+        toggleItem.title = status.toggleLabel
+        appState?.status = status
     }
 
     // MARK: - About
@@ -332,17 +448,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let copyright = bundle.infoDictionary?["NSHumanReadableCopyright"] as? String
             ?? "© 2026 2M Tech"
 
-        // Credits: MIT license notice, shown in the scrollable area of the About panel.
+        // Credits: MIT licence notice, shown in the scrollable area of the About panel.
         let credits = """
         Murmur — local voice-to-text dictation for macOS.
 
-        Licensed under the MIT License.
+        Released under the MIT License.
 
-        Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-        The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+        Source: https://github.com/mhumby/murmur
         """
 
         let creditsAttr = NSAttributedString(
@@ -365,15 +477,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.orderFrontStandardAboutPanel(options: options)
     }
 
-    // MARK: - Model selection
+    // MARK: - Main window
 
-    @objc func selectModel(_ sender: NSMenuItem) {
-        currentModel = models[sender.tag].id
-        if let menu = sender.menu {
-            for item in menu.items { item.state = .off }
-        }
-        sender.state = .on
-        logger.log("[INFO] Model changed to \(currentModel)")
+    @objc func openMainWindow() {
+        mainWindowController.show()
     }
 }
 
